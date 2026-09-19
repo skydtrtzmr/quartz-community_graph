@@ -1,7 +1,7 @@
 {
-  "name": "@quartz-community/graph",
+  "name": "graph-pro",
   "version": "1.0.0",
-  "description": "Interactive graph visualization component for Quartz - visualize your content as a network graph.",
+  "description": "Graph Pro for Quartz - build-time graph precomputation (per-page local graph + single global graph JSON) ported from v4, plus (step 2) the custom interactive graph layer.",
   "type": "module",
   "license": "MIT",
   "author": "Quartz Community",
@@ -85,15 +85,19 @@
     "@changesets/cli": "^2.29.2"
   },
   "quartz": {
-    "name": "graph",
-    "displayName": "Graph",
-    "category": "component",
+    "name": "graph-pro",
+    "displayName": "Graph Pro",
+    "category": "emitter",
     "version": "1.0.0",
     "quartzVersion": ">=5.0.0",
     "dependencies": [],
-    "defaultOrder": 50,
-    "defaultEnabled": true,
+    "defaultOrder": 55,
+    "defaultEnabled": false,
     "defaultOptions": {
+      "graph": {
+        "precomputeLocal": true,
+        "localDepth": 1
+      },
       "localGraph": {
         "drag": true,
         "zoom": true,
@@ -110,6 +114,7 @@
         "enableRadial": false
       },
       "globalGraph": {
+        "enabled": true,
         "drag": true,
         "zoom": true,
         "depth": -1,
@@ -122,17 +127,17 @@
         "showTags": true,
         "removeTags": [],
         "focusOnHover": true,
-        "enableRadial": true
-      }
-    },
-    "components": {
-      "Graph": {
-        "displayName": "Graph",
-        "defaultPosition": "right",
-        "defaultPriority": 10
+        "enableRadial": true,
+        "coreNodeLimit": 100,
+        "startCollapsed": true,
+        "filterOrphans": true,
+        "filterNonCoreNodes": true
       }
     },
     "optionSchema": {
+      "graph": {
+        "type": "object"
+      },
       "localGraph": {
         "type": "object"
       },
