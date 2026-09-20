@@ -74,3 +74,34 @@
   width: 100%;
   height: 100%;
 }
+
+// 全局图谱按钮：与阅读模式按钮（.readermode，视口右上角固定定位）并列，
+// 因此沿用同一套定位参数，只把 right 向左错开一格。
+.graph-toggle {
+  cursor: pointer;
+  padding: 0;
+  position: fixed;
+  top: 0.75rem;
+  right: 3.25rem;
+  z-index: 200;
+  background: none;
+  border: none;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: background-color 0.15s ease;
+
+  &:hover {
+    background-color: var(--lightgray);
+  }
+
+  & svg {
+    width: 20px;
+    height: 20px;
+    fill: var(--darkgray);
+  }
+}
