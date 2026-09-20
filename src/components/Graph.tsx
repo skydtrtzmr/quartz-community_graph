@@ -8,6 +8,33 @@ import { i18n } from "../i18n";
 import style from "./styles/graph.scss";
 // @ts-expect-error - inline script imported as string by esbuild loader
 import script from "./scripts/graph.inline.ts";
+import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation";
+
+// 从 baseUrl 提取子路径（与 explorer-pro / v4 Graph.tsx 同一实现）
+// "http://127.0.0.1:9766/demo-region" -> "demo-region"
+function getBasePath(baseUrl: string | undefined): string {
+  if (!baseUrl) return "";
+  // 如果已经是完整 URL（含协议），直接解析提取 pathname
+  if (baseUrl.includes("://")) {
+    try {
+      const url = new URL(baseUrl);
+      return url.pathname === "/" ? "" : url.pathname.replace(/^\//, "");
+    } catch {
+      return "";
+    }
+  }
+  // 不含协议但含 /（如 "localhost/demo-region"），补全 https:// 后用 URL 解析
+  if (baseUrl.includes("/")) {
+    try {
+      const url = new URL(`https://${baseUrl}`);
+      return url.pathname === "/" ? "" : url.pathname.replace(/^\//, "");
+    } catch {
+      // 解析失败，fall through
+    }
+  }
+  // 否则作为纯路径返回（去掉开头和结尾的 /）
+  return baseUrl.replace(/^\//, "").replace(/\/$/, "");
+}
 
 export interface D3Config {
   drag: boolean;
@@ -23,14 +50,50 @@ export interface D3Config {
   showTags: boolean;
   focusOnHover?: boolean;
   enableRadial?: boolean;
+  // ===== 以下为 v4 graph3 交互层读取的扩展键（预计算 / 聚合 / 大区 / 徽标）=====
+  /** 是否显示连线箭头 */
+  showArrows?: boolean;
+  /** 是否在节点上显示徽标 */
+  showBadge?: boolean;
+  /** 是否过滤孤儿节点 */
+  filterOrphans?: boolean;
+  /** 首屏是否折叠（全局图谱） */
+  startCollapsed?: boolean;
+  /** 节点中心数字显示下限（仅全局图谱核心节点） */
+  countLabelMin?: number;
+  /** 节点中心数字显示上限，超出显示为 `${上限}+` */
+  countLabelMaxDisplay?: number;
+  /** 边缘节点聚合规则（按字段把叶子分组为聚合节点） */
+  aggregation?: AggregationRule[];
+  /** 核心节点过滤规则（满足任一规则即为核心节点） */
+  coreNodeFilter?: CoreNodeFilterConfig;
+  /** 核心节点数量硬上限（未配置 regionRules 时生效） */
+  coreNodeLimit?: number;
+  /** 大区聚合规则（配置后首屏显示大区节点，点击展开） */
+  regionRules?: AggregationRule[];
+  /** 展开大区时是否连带展开内部核心节点 */
+  expandCoresOnRegionOpen?: boolean;
+  /** 首屏是否过滤非核心节点（配置了 coreNodeFilter 时生效） */
+  filterNonCoreNodes?: boolean;
+  /** 按 frontmatter 字段为节点分配分类颜色，例如 `type` */
+  colorBy?: string;
 }
 
 export interface GraphOptions {
+  /** 构建期预计算开关（由 emitter 消费；localDepth 同时决定运行时的 usePrecomputed 判定） */
+  graph?: {
+    precomputeLocal?: boolean;
+    localDepth?: number;
+  };
   localGraph?: Partial<D3Config>;
   globalGraph?: Partial<D3Config>;
 }
 
 const defaultOptions: GraphOptions = {
+  graph: {
+    precomputeLocal: true,
+    localDepth: 1,
+  },
   localGraph: {
     drag: true,
     zoom: true,
@@ -45,6 +108,11 @@ const defaultOptions: GraphOptions = {
     removeTags: [],
     focusOnHover: false,
     enableRadial: false,
+    showArrows: true,
+    showBadge: false,
+    filterOrphans: false,
+    startCollapsed: false,
+    countLabelMaxDisplay: 120,
   },
   globalGraph: {
     drag: true,
@@ -60,6 +128,14 @@ const defaultOptions: GraphOptions = {
     removeTags: [],
     focusOnHover: true,
     enableRadial: true,
+    showArrows: true,
+    filterOrphans: true,
+    startCollapsed: true,
+    countLabelMin: 7,
+    countLabelMaxDisplay: 120,
+    coreNodeLimit: 100,
+    filterNonCoreNodes: true,
+    expandCoresOnRegionOpen: false,
   },
 };
 
@@ -67,13 +143,23 @@ export default ((userOpts?: Partial<GraphOptions>) => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
     const localGraph = { ...defaultOptions.localGraph, ...userOpts?.localGraph };
     const globalGraph = { ...defaultOptions.globalGraph, ...userOpts?.globalGraph };
+    // 传给 inline 脚本用于拼预计算 JSON 路径
+    const basePath = getBasePath(cfg.baseUrl);
+    // 运行时判定 usePrecomputed = depth > 0 && depth <= precomputeDepth，
+    // 必须与 emitter 的 options.graph.localDepth 保持一致
+    const precomputeDepth = userOpts?.graph?.localDepth ?? localGraph.depth ?? 1;
 
     return (
       <div class={classNames(displayClass, "graph")}>
         <h3>{i18n(cfg.locale ?? "en-US").components.graph.title}</h3>
         <div class="graph-outer">
-          <div class="graph-container" data-cfg={JSON.stringify(localGraph)}></div>
-          <button class="global-graph-icon" aria-label="Global Graph">
+          <div
+            class="graph-container"
+            data-basepath={basePath}
+            data-cfg={JSON.stringify(localGraph)}
+            data-precompute-depth={String(precomputeDepth)}
+          ></div>
+          <button class="global-graph-icon" aria-label="Expand Local Graph" title="放大局部图谱">
             <svg
               version="1.1"
               xmlns="http://www.w3.org/2000/svg"
@@ -101,7 +187,13 @@ export default ((userOpts?: Partial<GraphOptions>) => {
           </button>
         </div>
         <div class="global-graph-outer">
-          <div class="global-graph-container" data-cfg={JSON.stringify(globalGraph)}></div>
+          <div
+            class="global-graph-container"
+            data-basepath={basePath}
+            data-cfg={JSON.stringify(globalGraph)}
+            data-global-cfg={JSON.stringify(globalGraph)}
+            data-precompute-depth={String(precomputeDepth)}
+          ></div>
         </div>
       </div>
     );

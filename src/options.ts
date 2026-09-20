@@ -22,7 +22,9 @@ export interface GraphProOptions {
 
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */
   localGraph?: {
+    /** 边缘叶子节点聚合规则（运行时按目录/字段分组为聚合节点，带数字徽标） */
     aggregation?: AggregationRule[]
+    /** 其余为组件侧 D3Config 参数（drag/zoom/depth/...） */
     [key: string]: unknown
   }
 
@@ -40,10 +42,16 @@ export interface GraphProOptions {
     coreNodeLimit?: number
     /** 首屏是否只显示核心节点（默认 true） */
     startCollapsed?: boolean
+    /** 大区展开后是否同时展开内部核心节点（默认 false；false 时核心节点保持收起） */
+    expandCoresOnRegionOpen?: boolean
     /** 是否过滤孤儿节点（默认 true） */
     filterOrphans?: boolean
     /** 是否过滤非核心节点（默认 true） */
     filterNonCoreNodes?: boolean
+    /** 按 frontmatter 字段为节点分配分类颜色，例如 `type` */
+    colorBy?: string
+    /** 节点中心数字显示上限，超出显示为 `${上限}+`（默认 120） */
+    countLabelMaxDisplay?: number
     /** 是否把标签作为节点（默认 true） */
     showTags?: boolean
     /** 要移除的标签 */
