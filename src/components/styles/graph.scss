@@ -99,9 +99,16 @@
     background-color: var(--lightgray);
   }
 
+  // 描边风格图标（地球），与侧栏实心"节点网络"图标区分
   & svg {
     width: 20px;
     height: 20px;
-    fill: var(--darkgray);
+    fill: none;
+    stroke: var(--darkgray);
+    stroke-width: 1.8;
+  }
+
+  &:hover svg {
+    stroke: var(--secondary);
   }
 }
