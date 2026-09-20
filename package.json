@@ -64,7 +64,9 @@
   },
   "dependencies": {
     "@quartz-community/types": "^1.0.0",
-    "@quartz-community/utils": "^1.0.0"
+    "@quartz-community/utils": "^1.0.0",
+    "d3": "^7.9.0",
+    "pixi.js": "^8.15.0"
   },
   "devDependencies": {
     "@types/hast": "^3.0.4",
@@ -87,7 +89,7 @@
   "quartz": {
     "name": "graph-pro",
     "displayName": "Graph Pro",
-    "category": "emitter",
+    "category": ["component", "emitter"],
     "version": "1.0.0",
     "quartzVersion": ">=5.0.0",
     "dependencies": [],
@@ -143,6 +145,13 @@
       },
       "globalGraph": {
         "type": "object"
+      }
+    },
+    "components": {
+      "Graph": {
+        "displayName": "Graph",
+        "defaultPosition": "right",
+        "defaultPriority": 10
       }
     }
   },

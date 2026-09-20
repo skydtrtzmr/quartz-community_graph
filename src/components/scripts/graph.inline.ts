@@ -1,4 +1,6 @@
 // @ts-nocheck
+import * as d3 from "d3";
+import * as PIXI from "pixi.js";
 import {
   removeAllChildren,
   getBasePath,
@@ -6,6 +8,12 @@ import {
   simplifySlug,
   resolveBasePath,
 } from "@quartz-community/utils";
+
+// 依赖随插件一起打包（与 v4 `client/quartz/components/scripts/graph3.inline.ts` 的
+// `import ... from "d3" / "pixi.js"` 同构），不再走 CDN。
+// 挂到全局后，下方 plain-JS 代码里的 window.d3 / window.PIXI 用法无需任何改动。
+;(globalThis as any).d3 = (globalThis as any).d3 ?? d3;
+;(globalThis as any).PIXI = (globalThis as any).PIXI ?? PIXI;
 
 (function () {
   function getSlugFromUrl() {
@@ -18,38 +26,21 @@ import {
     return slug;
   }
 
-  function loadScript(src) {
-    var existing = document.querySelector('script[src="' + src + '"]');
-    if (existing) return Promise.resolve();
-    return new Promise(function (resolve, reject) {
-      var script = document.createElement("script");
-      script.src = src;
-      script.crossOrigin = "anonymous";
-      script.onload = resolve;
-      script.onerror = reject;
-      document.head.appendChild(script);
-    });
+  // d3 / pixi 已随插件打包成静态依赖（见文件顶部 import），不再有 CDN 加载环节。
+  try {
+    initGraph();
+  } catch (err) {
+    console.error("[Graph] Failed to initialise:", err);
+    var containers = document.querySelectorAll(".graph-container");
+    for (var i = 0; i < containers.length; i++) {
+      containers[i].textContent = "Graph could not load.";
+      containers[i].style.display = "flex";
+      containers[i].style.alignItems = "center";
+      containers[i].style.justifyContent = "center";
+      containers[i].style.color = "var(--gray)";
+      containers[i].style.fontSize = "0.9rem";
+    }
   }
-
-  Promise.all([
-    loadScript("https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"),
-    loadScript("https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.js"),
-  ])
-    .then(function () {
-      initGraph();
-    })
-    .catch(function (err) {
-      console.error("[Graph] Failed to load libraries:", err);
-      var containers = document.querySelectorAll(".graph-container");
-      for (var i = 0; i < containers.length; i++) {
-        containers[i].textContent = "Graph could not load. Check your network connection.";
-        containers[i].style.display = "flex";
-        containers[i].style.alignItems = "center";
-        containers[i].style.justifyContent = "center";
-        containers[i].style.color = "var(--gray)";
-        containers[i].style.fontSize = "0.9rem";
-      }
-    });
 
   function initGraph() {
     var d3 = window.d3;
