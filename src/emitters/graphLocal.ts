@@ -285,17 +285,27 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
 
       // 确定受影响的 slug：变更文件 + 入链/出链邻居
       const affectedSlugs = new Set<SimpleSlug>()
-      const deletedSlugs = new Set<SimpleSlug>()
 
       for (const evt of changeEvents) {
         const evtSlug = (evt.file?.data as unknown as IndexableFileData | undefined)?.slug
-        const slug = simplifySlug(
-          evtSlug ?? (evt.path.replace(/\.md$/, "") as unknown as FullSlug),
-        )
+        const slug = simplifySlug(evtSlug ?? (evt.path.replace(/\.md$/, "") as unknown as FullSlug))
         affectedSlugs.add(slug)
 
-        if (evt.type === "delete") {
-          deletedSlugs.add(slug)
+        // 索引已合并为新状态；旧局部图保存着断开/删除之前的邻居。
+        // 同时刷新它们，否则删除 A -> B 后 B 的图中仍然保留 A。
+        const previousPath = joinSegments(
+          ctx.argv.output,
+          "graph",
+          "local",
+          getLocalGraphPath(slug) + ".json",
+        )
+        try {
+          const previous = JSON.parse(await fs.readFile(previousPath, "utf-8")) as LocalGraphData
+          for (const previousSlug of Object.keys(previous.nodes)) {
+            affectedSlugs.add(previousSlug as SimpleSlug)
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
         }
 
         // 添加出链目标（邻居的 local graph 需要更新）
@@ -318,7 +328,8 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
       }
 
       // 删除已不存在的文件对应的 local graph
-      for (const slug of deletedSlugs) {
+      for (const slug of affectedSlugs) {
+        if (validLinks.has(slug)) continue
         const path = getLocalGraphPath(slug)
         const fp = joinSegments(ctx.argv.output, "graph", "local", path + ".json")
         try {
