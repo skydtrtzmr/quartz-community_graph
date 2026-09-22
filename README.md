@@ -2,6 +2,35 @@
 
 The Graph View component for Quartz - visualize your digital garden as an interactive network graph.
 
+## 共享聚合规则
+
+配置了 `configuration.aggregation` 时，侧栏局部图及放大局部图读取
+`static/aggregation.json`，以当前页面为中心，合并入链、出链邻居后分组。
+规则值只来自该产物，graph-pro 不解析目录继承规则。
+全局图谱的构建期预计算及运行时展开也使用该规则；仅核心节点建立聚合，
+核心之间保留原始关系，大区仍由 regionRules 控制。每个中心独立记录成员归属。
+
+首层按 root 目录分组，展开后使用该目录的 resolved 规则链；只有一个目录时
+直接执行其后续规则。显式空链停止聚合。同一目录分支当前层只要有一类达到
+minGroupSize，所有类别统一显示聚合节点（含单成员类别）；全部未达阈值则
+尝试下一条规则，最终整体散开。首层的小目录仍按目录人数决定是否折叠。
+字段数组取首个非空值，部分缺值显示“未设置”，全部缺值跳过当前规则。
+日期只读取指定字段，以 UTC 年/月/季度分组。
+展开时聚合节点固定在点击位置，仍可拖动；收起后明确释放固定位置。
+关闭双击画布缩放，保留滚轮缩放及节点导航。
+新增子节点沿“上一级父节点→当前聚合”的方向在向外 120° 扇形内初始化，
+人数较多时适度增加半径；已可见的共享节点不移动。仅调整初始位置，
+不施加持续方向约束，并降低布局重启力度以减少展开时的位置跳动。
+
+本阶段不增加虚拟页识别或特殊过滤。未配置
+共享聚合的业务域也沿用旧逻辑。共享 JSON 加载失败会提示错误，不静默回退。
+插件代码或配置更新后先执行插件 build，再对站点执行一次 `--reset` 构建。
+
+`options.localGraph.showAggregatedNodeLinks` 和
+`options.globalGraph.showAggregatedNodeLinks`（默认 true）控制共享聚合展开后，
+是否显示文件与原中心的真实连线。设为 false 时仍保留聚合父子连线及其他关系；
+多级展开中的“原中心”一直指最初的页面/核心节点，而非中间聚合节点。
+
 ## Features
 
 - 🕸️ **Interactive Network Graph** - Visualize connections between your pages

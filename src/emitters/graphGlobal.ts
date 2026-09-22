@@ -27,6 +27,8 @@ import type {
 import { joinSegments } from "@quartz-community/types"
 import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
+import { readFile } from "node:fs/promises"
+import { groupShared, readSharedAggregation } from "../util/sharedAggregation"
 import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
 import {
   extractGroupKey,
@@ -77,7 +79,7 @@ interface GlobalGraphPrecomputed {
   }
   nodeDetails: Record<
     string,
-    { id: string; text: string; tags: string[]; frontmatter?: Record<string, unknown> }
+    { id: string; fullSlug?: string; text: string; tags: string[]; frontmatter?: Record<string, unknown> }
   >
   firstScreen: PreGraphData
   adjacency: {
@@ -160,6 +162,9 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
    * contentData 必须包含全量文件数据。
    */
   async function* computeAndEmit(ctx: BuildCtx, contentData: Map<SimpleSlug, ContentDetails>) {
+    const shared = (ctx.cfg.configuration as unknown as { aggregation?: unknown }).aggregation === undefined
+      ? null
+      : readSharedAggregation(JSON.parse(await readFile(joinSegments(ctx.argv.output, "static", "aggregation.json"), "utf8")))
     const aggregation: AggregationRule[] = opts.aggregation ?? []
     const regionRules: AggregationRule[] = opts.regionRules ?? []
     const coreNodeFilter: CoreNodeFilterConfig = opts.coreNodeFilter ?? []
@@ -357,7 +362,34 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
 
     const rules = aggregation ?? []
 
-    if (rules.length > 0) {
+    if (shared) {
+      // Every core owns its own membership, including neighbors shared with other cores.
+      for (const [coreId, edgeIds] of Object.entries(nodeToEdgeNodeIds)) {
+        const grouped = groupShared(edgeIds, shared, id => {
+          const details = contentData.get(id as SimpleSlug)
+          return { slug: details?.slug ?? id, frontmatter: details?.frontmatter }
+        })
+        for (const group of grouped.groups) {
+          const { rule, key, members: childIds, remainingRules } = group
+          const aggId = `agg:shared:${JSON.stringify([coreId, rule, key])}`
+          const childLinkIndices: number[] = []
+          const memberIds = new Set(childIds)
+          for (const link of effectiveLinks) {
+            if (memberIds.has(link.source) || memberIds.has(link.target)) {
+              childLinkIndices.push(childLinksPool.length)
+              childLinksPool.push(link)
+            }
+          }
+          aggNodes[aggId] = {
+            coreId, childNodeIds: childIds, childLinkIndices, remainingRules,
+            currentField: rule.type === "folder" ? "📁" : rule.field!,
+            displayText: rule.type === "folder" ? `📁 ${key === "/" ? folderTitles["/"] ?? "根目录" : folderDisplay(key)}` : key,
+          }
+          aggToCore[aggId] = coreId
+          for (const id of childIds) childToAgg.set(`${coreId}\t${id}`, aggId)
+        }
+      }
+    } else if (rules.length > 0) {
       for (const [coreId, edgeNodeIds] of Object.entries(nodeToEdgeNodeIds)) {
         let leavesForNextRule = edgeNodeIds.filter((id) => singleLinkEdgeNodeIds.has(id))
         if (leavesForNextRule.length <= 1) continue
@@ -530,12 +562,13 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     // ===== Step 9: 节点详情 =====
     const nodeDetails: Record<
       string,
-      { id: string; text: string; tags: string[]; frontmatter?: Record<string, unknown> }
+      { id: string; fullSlug?: string; text: string; tags: string[]; frontmatter?: Record<string, unknown> }
     > = {}
     for (const nodeId of effectiveNodeIds) {
       const details = contentData.get(nodeId as SimpleSlug)
       nodeDetails[nodeId] = {
         id: nodeId,
+        fullSlug: details?.slug,
         text: nodeId.startsWith("tags/") ? "#" + nodeId.substring(5) : (details?.title ?? nodeId),
         tags: details?.tags ?? [],
         frontmatter: details?.frontmatter,

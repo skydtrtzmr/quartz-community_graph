@@ -65,6 +65,8 @@ export interface D3Config {
   countLabelMaxDisplay?: number;
   /** 边缘节点聚合规则（按字段把叶子分组为聚合节点） */
   aggregation?: AggregationRule[];
+  /** 展开聚合后保留子节点与原中心的真实连线，默认 true。 */
+  showAggregatedNodeLinks?: boolean;
   /** 核心节点过滤规则（满足任一规则即为核心节点） */
   coreNodeFilter?: CoreNodeFilterConfig;
   /** 核心节点数量硬上限（未配置 regionRules 时生效） */
@@ -158,6 +160,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
             data-basepath={basePath}
             data-cfg={JSON.stringify(localGraph)}
             data-precompute-depth={String(precomputeDepth)}
+            data-shared-aggregation={String((cfg as unknown as { aggregation?: unknown }).aggregation !== undefined)}
           ></div>
           <button class="global-graph-icon" aria-label="Expand Local Graph" title="放大局部图谱">
             <svg
@@ -192,6 +195,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
             data-basepath={basePath}
             data-cfg={JSON.stringify(globalGraph)}
             data-global-cfg={JSON.stringify(globalGraph)}
+            data-shared-aggregation={String((cfg as unknown as { aggregation?: unknown }).aggregation !== undefined)}
             data-precompute-depth={String(precomputeDepth)}
           ></div>
         </div>

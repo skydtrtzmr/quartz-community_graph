@@ -37,6 +37,7 @@ import {
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, matchCoreNodeFilter } from "../../util/aggregation"
+import { groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -411,6 +412,7 @@ function main() {
       startCollapsed = false,
       countLabelMaxDisplay = 99,
       aggregation,
+      showAggregatedNodeLinks = true,
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
       regionRules,
@@ -423,6 +425,23 @@ function main() {
     const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
 
     basePath = graph.dataset.basepath || ""
+
+    // Stage 2: local graph consumes the shared artifact, including subsequent expansion.
+    // The dataset only enables loading; rule values come exclusively from the JSON.
+    let sharedAggregation = null
+    if (graph.dataset.sharedAggregation === "true") {
+      try {
+        const response = await fetch(`${basePath ? `/${basePath}` : ""}/static/aggregation.json`)
+        if (!response.ok) throw new Error(`aggregation.json: HTTP ${response.status}`)
+        sharedAggregation = readSharedAggregation(await response.json())
+      } catch (error) {
+        if (!checkGeneration(generation)) return () => {}
+        graph.textContent = "聚合规则加载失败，请检查 aggregation.json 并重新构建。"
+        console.error("[Graph] Shared aggregation failed", error)
+        return () => {}
+      }
+      if (!checkGeneration(generation)) return () => {}
+    }
 
     // 从 data-precompute-depth 获取预计算深度（统一配置，与 graphLocal.tsx 使用相同的 cfg.graph.localDepth）
     const precomputeDepth = parseInt(graph.dataset["precomputeDepth"] ?? "1")
@@ -551,6 +570,34 @@ function main() {
     }
     let aggNodeInfoMap: Map<SimpleSlug, AggregationNodeInfo> = new Map()
 
+    const describeAggregationNode = (node: NodeData) => {
+      const details = contentData.get(node.id)
+      return { slug: details?.slug ?? node.id, frontmatter: details?.frontmatter }
+    }
+    const createSharedGroups = (parent: NodeData, members: NodeData[], rules?: AggregationRule[]) => {
+      const result = groupShared(members, sharedAggregation, describeAggregationNode, rules)
+      const nodes = [...result.leaves]
+      for (const group of result.groups) {
+        const { rule, key, remainingRules } = group
+        const id = `agg:shared:${JSON.stringify([parent.id, rule, key])}` as SimpleSlug
+        const node: NodeData = {
+          id, text: rule.type === "folder" ? `📁 ${key === "/" ? folderTitleMap.get("/") ?? "根目录" : folderDisplay(key)}` : key,
+          tags: [], isCore: false, isAggregation: true, edgeNodeCount: 1,
+          aggChildCount: group.members.length,
+          aggCollapsedRadius: Math.min(30, Math.max(16, 2 + Math.sqrt(group.members.length))),
+        }
+        const memberIds = new Set(group.members.map(n => n.id))
+        const childLinks = allLinks.filter(l => memberIds.has(l.source.id) || memberIds.has(l.target.id))
+        const currentField = rule.type === "folder" ? "📁" : rule.field
+        aggNodeInfoMap.set(id, { node, coreId: parent.id, childNodes: group.members, childLinks, remainingRules, currentField })
+        aggNodeToChildNodes.set(id, group.members)
+        aggNodeToChildLinks.set(id, childLinks)
+        aggToCoreMap.set(id, parent.id)
+        nodes.push(node)
+      }
+      return nodes
+    }
+
     // [GRAPH3] 预计算路径 vs 运行时计算路径
     if (globalPrecomputed) {
       console.log("[GRAPH3] ===== 使用预计算数据构建图谱 =====")
@@ -567,7 +614,7 @@ function main() {
       )
       for (const [id, detail] of Object.entries(pc.nodeDetails)) {
         contentData.set(id as SimpleSlug, {
-          slug: id as any,
+          slug: (detail.fullSlug ?? id) as any,
           filePath: "" as any,
           title: detail.text,
           links: [],
@@ -632,29 +679,19 @@ function main() {
           const edgeNode = allNodeMap.get(edgeIds[i] as SimpleSlug)
           if (!edgeNode) continue
           edgeNodes.push(edgeNode)
-          if (i < linkIndices.length && linkIndices[i] >= 0) {
-            const cl = pc.allChildLinks[linkIndices[i]]
-            if (cl) {
-              const sourceNode =
-                cl.source === coreId
-                  ? coreNode
-                  : allNodeMap.get(cl.source as SimpleSlug) || edgeNode
-              const targetNode2 =
-                cl.target === coreId
-                  ? coreNode
-                  : allNodeMap.get(cl.target as SimpleSlug) || edgeNode
-              if (sourceNode && targetNode2) {
-                edgeLinks.push({
-                  source: sourceNode,
-                  target: targetNode2,
-                  sourceField: cl.sourceField,
-                })
-              }
-            }
-          } else {
-            // 聚合连接 (-1)：核心节点 → 聚合节点
+          if (pc.aggNodes[edgeNode.id]?.coreId === coreId) {
             edgeLinks.push({ source: edgeNode, target: coreNode })
           }
+        }
+        // A neighbor can have both incoming and outgoing edges; index lists are not
+        // one-to-one with node lists. Replay every real edge with its original direction.
+        for (const index of linkIndices) {
+          if (index < 0) continue
+          const cl = pc.allChildLinks[index]
+          if (!cl) continue
+          const source = allNodeMap.get(cl.source as SimpleSlug)
+          const target = allNodeMap.get(cl.target as SimpleSlug)
+          if (source && target) edgeLinks.push({ source, target, sourceField: cl.sourceField })
         }
         nodeToEdgeNodes.set(coreId as SimpleSlug, edgeNodes)
         nodeToEdgeLinks.set(coreId as SimpleSlug, edgeLinks)
@@ -1019,6 +1056,10 @@ function main() {
         }
       }
 
+      if (sharedAggregation && !isGlobalGraph) {
+        for (const n of nonOrphanNodes) n.isCore = n.id === slug
+      }
+
       // [SAFETY] 全局图谱硬上限：无论规则匹配还是回退，核心节点数不能超过上限
       // 注意：配置了 regionRules 时首屏已按大区聚合，跳过全局硬上限以避免大区计数失真
       if (
@@ -1094,7 +1135,23 @@ function main() {
 
       const rules = aggregation ?? []
 
-      if (rules.length > 0) {
+      if (sharedAggregation) {
+        // A local view has one explicit center, irrespective of neighbors' link counts.
+        const centers = nonOrphanNodes.filter(n => isGlobalGraph ? n.isCore : n.id === slug)
+        for (const center of centers) {
+          const neighbors = new Set(nonOrphanLinks.flatMap(l =>
+            l.source.id === center.id ? [l.target.id] : l.target.id === center.id ? [l.source.id] : []))
+          neighbors.delete(center.id)
+          const members = nonOrphanNodes.filter(n => neighbors.has(n.id) && (!isGlobalGraph || !n.isCore) && !n.isAggregation)
+          const grouped = createSharedGroups(center, members)
+          nodeToEdgeNodes.set(center.id, grouped)
+          nodeToEdgeLinks.set(center.id, [
+            ...nonOrphanLinks.filter(l => (l.source.id === center.id || l.target.id === center.id) && grouped.some(n => n.id === (l.source.id === center.id ? l.target.id : l.source.id))),
+            ...grouped.filter(n => n.isAggregation).map(n => ({ source: n, target: center })),
+          ])
+        }
+        for (const info of aggNodeInfoMap.values()) nonOrphanNodes.push(info.node)
+      } else if (rules.length > 0) {
         // 逐个核心节点，对其单链接叶节点按规则顺序聚合
         for (const [coreId, coreEdgeNodes] of nodeToEdgeNodes.entries()) {
           let leavesForNextRule = coreEdgeNodes.filter((n) => singleLinkEdgeNodeIds.has(n.id))
@@ -1509,6 +1566,15 @@ function main() {
 
     // 追踪展开的聚合节点与其子节点的映射，用于碰撞检测时跳过父子碰撞
     const expandedAggChildren = new Map<SimpleSlug, Set<SimpleSlug>>()
+    const expansionPins = new Set<SimpleSlug>()
+    function releaseExpansionPin(node: NodeData) {
+      if (!expansionPins.has(node.id)) return
+      // Clicking also starts a D3 drag, whose temporary fx/fy must not be restored
+      // as a permanent pin when this aggregation is collapsed.
+      node.fx = null
+      node.fy = null
+      expansionPins.delete(node.id)
+    }
 
     function nodeRadius(d: NodeData) {
       if (d.aggExpandedRadius) return d.aggExpandedRadius
@@ -2497,7 +2563,26 @@ function main() {
         const rawChildren = aggNodeToChildNodes.get(nodeId) ?? []
 
         // 多级聚合：若还有 remainingRules，按规则顺序执行
-        if (aggInfo && aggInfo.remainingRules.length > 0) {
+        if (sharedAggregation && aggInfo) {
+          edgeNodesToAdd = createSharedGroups(aggInfo.node, rawChildren, aggInfo.remainingRules)
+          edgeLinksToAdd = edgeNodesToAdd.map(child => ({ source: aggInfo.node, target: child }))
+          const visible = new Set([...graphData.nodes, ...edgeNodesToAdd].map(n => n.id))
+          const expandedMembers = new Set(rawChildren.map(n => n.id))
+          edgeLinksToAdd.push(...allLinks.filter(l => {
+            if (!visible.has(l.source.id) || !visible.has(l.target.id)) return false
+            if (!expandedMembers.has(l.source.id) && !expandedMembers.has(l.target.id)) return false
+            if (showAggregatedNodeLinks) return true
+            // Nested aggregation parents are not the original center. Follow the ownership chain.
+            for (const [id, info] of aggNodeInfoMap) {
+              if (id !== nodeId && !expandedNodeIds.has(id)) continue
+              let root = info.coreId
+              while (aggToCoreMap.has(root)) root = aggToCoreMap.get(root)!
+              if ((l.source.id === root && info.childNodes.some(n => n.id === l.target.id)) ||
+                  (l.target.id === root && info.childNodes.some(n => n.id === l.source.id))) return false
+            }
+            return true
+          }))
+        } else if (aggInfo && aggInfo.remainingRules.length > 0) {
           const childNodes = rawChildren.filter(
             (n) => !graphData.nodes.some((gn) => gn.id === n.id),
           )
@@ -2676,12 +2761,48 @@ function main() {
 
       const parentNode = graphData.nodes.find((n) => n.id === nodeId)
 
-      // 子节点随机分布在父节点周围（适用于聚合节点和核心节点）
+      // Keep the clicked aggregation anchored while its children settle around it.
       if (parentNode?.x !== undefined && parentNode?.y !== undefined) {
-        for (const edgeNode of edgeNodesToAdd) {
-          if (graphData.nodes.some((n) => n.id === edgeNode.id)) continue
-          edgeNode.x = parentNode.x + (Math.random() - 0.5) * 80
-          edgeNode.y = parentNode.y + (Math.random() - 0.5) * 80
+        if (isAggNode) {
+          expansionPins.add(nodeId)
+          parentNode.fx = parentNode.x
+          parentNode.fy = parentNode.y
+          parentNode.vx = 0
+          parentNode.vy = 0
+        }
+        const newNodes = edgeNodesToAdd.filter(n => !graphData.nodes.some(existing => existing.id === n.id))
+        // Expand away from the immediate aggregation parent (or the original core
+        // at the first level). Only seed new positions; the simulation remains free.
+        let outwardAngle = Math.atan2(parentNode.y, parentNode.x)
+        if (isAggNode) {
+          let ancestorId = aggToCoreMap.get(nodeId)
+          const seen = new Set<string>([nodeId])
+          while (ancestorId && !seen.has(ancestorId)) {
+            seen.add(ancestorId)
+            const ancestor = graphData.nodes.find(n => n.id === ancestorId)
+            if (ancestor?.x !== undefined && ancestor?.y !== undefined) {
+              const dx = parentNode.x - ancestor.x
+              const dy = parentNode.y - ancestor.y
+              if (Math.hypot(dx, dy) > 1) {
+                outwardAngle = Math.atan2(dy, dx)
+                break
+              }
+            }
+            ancestorId = aggToCoreMap.get(ancestorId)
+          }
+        }
+        const baseRadius = Math.max(40, Math.min(linkDistance, 100))
+        const radius = isAggNode
+          ? Math.min(180, Math.max(baseRadius, Math.sqrt(newNodes.length) * 24))
+          : baseRadius
+        for (const [index, edgeNode] of newNodes.entries()) {
+          const angle = isAggNode
+            ? outwardAngle + (newNodes.length <= 1 ? 0 : (index / (newNodes.length - 1) - 0.5) * Math.PI * 2 / 3)
+            : index * Math.PI * 2 / Math.max(1, newNodes.length)
+          edgeNode.x = parentNode.x + Math.cos(angle) * radius
+          edgeNode.y = parentNode.y + Math.sin(angle) * radius
+          edgeNode.vx = 0
+          edgeNode.vy = 0
         }
       }
 
@@ -2740,7 +2861,7 @@ function main() {
 
       simulation.nodes(graphData.nodes)
       simulation.force("link", forceLink(graphData.links).distance(linkDistance))
-      simulation.alpha(0.3).restart()
+      simulation.alpha(isAggNode ? 0.12 : 0.3).restart()
     }
 
     function collapseNode(nodeId: SimpleSlug) {
@@ -2790,6 +2911,19 @@ function main() {
           }
         }
 
+        if (sharedAggregation) {
+          // A file may remain visible through another expanded core/aggregation outside this region.
+          for (const expandedId of expandedNodeIds) {
+            if (expandedId === nodeId || idsToRemove.has(expandedId)) continue
+            const children = expandedId.startsWith("agg:")
+              ? expandedAggChildren.get(expandedId) ?? new Set()
+              : new Set((nodeToEdgeNodes.get(expandedId) ?? []).map(n => n.id))
+            for (const childId of children) idsToRemove.delete(childId)
+          }
+        }
+        for (const node of graphData.nodes) {
+          if (idsToRemove.has(node.id)) releaseExpansionPin(node)
+        }
         graphData.nodes = graphData.nodes.filter((n) => !idsToRemove.has(n.id))
         graphData.links = graphData.links.filter(
           (l) => !idsToRemove.has(l.source.id) && !idsToRemove.has(l.target.id),
@@ -2881,6 +3015,7 @@ function main() {
       // 辅助：清理聚合节点的展开状态（gfx 样式、aggBg、expanded 标记等）
       function cleanupAggNodeState(aggNodeData: NodeData) {
         if (!aggNodeData.isAggregation) return
+        releaseExpansionPin(aggNodeData)
         aggNodeData.isExpanded = false
         aggNodeData.aggExpandedRadius = undefined
         expandedNodeIds.delete(aggNodeData.id)
@@ -2967,11 +3102,27 @@ function main() {
         )
       }
 
+      if (sharedAggregation && isAggNode) {
+        // Shared children may survive via another center; remove this parent's
+        // expansion edges even when their endpoint nodes remain visible.
+        const children = expandedAggChildren.get(nodeId) ?? new Set()
+        const belongsToExpansion = (link: LinkData) =>
+          (link.source.id === nodeId && children.has(link.target.id)) ||
+          (link.target.id === nodeId && children.has(link.source.id))
+        graphData.links = graphData.links.filter(link => !belongsToExpansion(link))
+        for (let i = linkRenderData.length - 1; i >= 0; i--) {
+          if (!belongsToExpansion(linkRenderData[i].simulationData)) continue
+          linkGraphicsPool.release(linkRenderData[i].gfx)
+          linkRenderData[i].label?.destroy()
+          linkRenderData.splice(i, 1)
+        }
+      }
       expandedNodeIds.delete(nodeId)
       expandedAggChildren.delete(nodeId)
       const nodeData = graphData.nodes.find((n) => n.id === nodeId)
       if (nodeData) {
         nodeData.isExpanded = false
+        releaseExpansionPin(nodeData)
         const rd = nodeRenderData.find((r) => r.simulationData.id === nodeId)
         if (rd) {
           // 聚合节点：销毁背景圆圈（若存在），恢复原始样式
@@ -3048,10 +3199,11 @@ function main() {
             if (isGlobalGraph) {
               // [TUNING] 全局图谱延迟释放固定位置，避免立即 fx=null 被拽走
               setTimeout(() => {
+                if (expansionPins.has(event.subject.id)) return
                 event.subject.fx = null
                 event.subject.fy = null
               }, 300)
-            } else {
+            } else if (!expansionPins.has(event.subject.id)) {
               // 局部图谱立即释放
               event.subject.fx = null
               event.subject.fy = null
@@ -3155,6 +3307,8 @@ function main() {
         })
       const canvasSelection = select<HTMLCanvasElement, NodeData>(app.canvas)
       canvasSelection.call(graphZoom)
+      // Disable D3's double-click (and double-tap) zoom without changing node navigation.
+      canvasSelection.on("dblclick.zoom", null)
       // 弹窗局部图谱以中心为基准放大 25%，并同步 D3 状态，避免首次滚轮缩放跳变。
       if (!isGlobalGraph && graph.classList.contains("global-graph-container")) {
         canvasSelection.call(graphZoom.scaleTo, 1.25, [width / 2, height / 2])
@@ -3431,6 +3585,7 @@ function main() {
             .closest(".graph")
             ?.querySelector<HTMLElement>(".graph-container")
           if (local) {
+            graphContainer.dataset.sharedAggregation = localContainer?.dataset.sharedAggregation ?? "false"
             const localConfig = JSON.parse(
               localContainer?.dataset.cfg ?? graphContainer.dataset.globalCfg ?? "{}",
             ) as D3Config
@@ -3440,6 +3595,7 @@ function main() {
               fontSize: (localConfig.fontSize ?? 0.6) * 1.25,
             })
           } else {
+            graphContainer.dataset.sharedAggregation = localContainer?.dataset.sharedAggregation ?? "false"
             graphContainer.dataset.cfg = graphContainer.dataset.globalCfg
           }
           const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration)

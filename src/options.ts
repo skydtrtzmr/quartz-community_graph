@@ -22,6 +22,7 @@ export interface GraphProOptions {
 
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */
   localGraph?: {
+    showAggregatedNodeLinks?: boolean
     /** 边缘叶子节点聚合规则（运行时按目录/字段分组为聚合节点，带数字徽标） */
     aggregation?: AggregationRule[]
     /** 其余为组件侧 D3Config 参数（drag/zoom/depth/...） */
@@ -30,6 +31,7 @@ export interface GraphProOptions {
 
   /** 交互期 + 全局图谱预计算参数 */
   globalGraph?: {
+    showAggregatedNodeLinks?: boolean
     /** 是否生成 graph/global/graphGlobal.json（默认 true） */
     enabled?: boolean
     /** 边缘节点聚合规则 */
