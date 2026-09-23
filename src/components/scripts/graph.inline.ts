@@ -1566,7 +1566,7 @@ function main() {
 
     // 追踪展开的聚合节点与其子节点的映射，用于碰撞检测时跳过父子碰撞
     const expandedAggChildren = new Map<SimpleSlug, Set<SimpleSlug>>()
-    const expansionPins = new Set<SimpleSlug>()
+    const expansionPins = new Map<SimpleSlug, { node: NodeData; releaseAt: number }>()
     function releaseExpansionPin(node: NodeData) {
       if (!expansionPins.has(node.id)) return
       // Clicking also starts a D3 drag, whose temporary fx/fy must not be restored
@@ -2764,7 +2764,9 @@ function main() {
       // Keep the clicked aggregation anchored while its children settle around it.
       if (parentNode?.x !== undefined && parentNode?.y !== undefined) {
         if (isAggNode) {
-          expansionPins.add(nodeId)
+          // The force layout has no discrete expansion-animation completion event.
+          // Anchor only during its initial settling phase, not for the entire expanded state.
+          expansionPins.set(nodeId, { node: parentNode, releaseAt: performance.now() + 800 })
           parentNode.fx = parentNode.x
           parentNode.fy = parentNode.y
           parentNode.vx = 0
@@ -3171,6 +3173,8 @@ function main() {
           .container(() => app.canvas)
           .subject(() => graphData.nodes.find((n) => n.id === hoveredNodeId))
           .on("start", function dragstarted(event) {
+            // User dragging takes over ownership of fx/fy from the temporary expansion pin.
+            releaseExpansionPin(event.subject)
             // 局部图谱保持适度活跃（0.3：原值 1 会让整图持续剧烈抖动），
             // 全局图谱温和加热避免大范围抖动
             if (!event.active) {
@@ -3477,6 +3481,9 @@ function main() {
         }
       }
 
+      for (const { node, releaseAt } of expansionPins.values()) {
+        if (performance.now() >= releaseAt) releaseExpansionPin(node)
+      }
       tweens.forEach((t) => t.update(time))
       app.renderer.render(stage)
       animationId = requestAnimationFrame(animate)
@@ -3498,6 +3505,7 @@ function main() {
       }
       simulation.stop()
       tweens.forEach((t) => t.stop())
+      expansionPins.clear()
       tweens.clear()
       select(app.canvas).on(".zoom", null).on(".drag", null)
       graphicsPool.clear()
