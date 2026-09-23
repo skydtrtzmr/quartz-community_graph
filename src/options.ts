@@ -8,7 +8,7 @@ import type { AggregationRule, CoreNodeFilterConfig } from "./util/aggregation"
  * 的 `graph` 段直接合并进来（无需再改插件代码）：
  *
  * - `graph`       ← settings/<domain>/quartz.config.json 的 `graph` 段（构建期）
- * - `localGraph`  ← settings/<domain>/quartz.layout.json 的 `graph` 段（局部图谱，第二步使用）
+ * - `localGraph`  ← settings/<domain>/quartz.layout.json 的 `graph` 段（局部图谱）
  * - `globalGraph` ← settings/<domain>/quartz.layout.json 的 `graph` 段（全局图谱 + 预计算参数）
  */
 export interface GraphProOptions {
@@ -61,4 +61,32 @@ export interface GraphProOptions {
     /** 其余为组件侧 D3Config 参数（drag/zoom/depth/...），构建期忽略 */
     [key: string]: unknown
   }
+}
+
+/**
+ * 全局图谱的组件侧默认调参，由 `components/GlobalGraphOverlay.tsx` 写入
+ * `.global-graph-container` 的 `data-cfg` / `data-global-cfg`（全局图谱调参的单一来源）。
+ */
+export const DEFAULT_GLOBAL_GRAPH_CFG: Record<string, unknown> = {
+  drag: true,
+  zoom: true,
+  depth: -1,
+  scale: 0.9,
+  repelForce: 0.5,
+  centerForce: 0.2,
+  linkDistance: 30,
+  fontSize: 0.6,
+  opacityScale: 1,
+  showTags: true,
+  removeTags: [],
+  focusOnHover: true,
+  enableRadial: true,
+  showArrows: true,
+  filterOrphans: true,
+  startCollapsed: true,
+  countLabelMin: 7,
+  countLabelMaxDisplay: 120,
+  coreNodeLimit: 100,
+  filterNonCoreNodes: true,
+  expandCoresOnRegionOpen: false,
 }

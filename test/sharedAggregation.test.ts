@@ -113,10 +113,12 @@ describe("shared local aggregation", () => {
 
   it("rejects bad protocols instead of silently using legacy options", () => {
     expect(readSharedAggregation(artifact)).toBe(artifact);
+    // minGroupSize 允许 1（每个取值都成组），0 仍非法
+    expect(readSharedAggregation({ ...artifact, minGroupSize: 1 }).minGroupSize).toBe(1);
     for (const bad of [
       null,
       { ...artifact, version: 2 },
-      { ...artifact, minGroupSize: 1 },
+      { ...artifact, minGroupSize: 0 },
       { ...artifact, resolved: { 任务: null } },
     ]) {
       expect(() => readSharedAggregation(bad)).toThrow("Invalid aggregation.json");

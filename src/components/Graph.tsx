@@ -5,36 +5,9 @@ import type {
 } from "@quartz-community/types";
 import { classNames } from "../util/lang";
 import { i18n } from "../i18n";
+import { getBasePath } from "../util/basePath";
 import style from "./styles/graph.scss";
-// @ts-expect-error - inline script imported as string by esbuild loader
-import script from "./scripts/graph.inline.ts";
 import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation";
-
-// 从 baseUrl 提取子路径（与 explorer-pro / v4 Graph.tsx 同一实现）
-// "http://127.0.0.1:9766/demo-region" -> "demo-region"
-function getBasePath(baseUrl: string | undefined): string {
-  if (!baseUrl) return "";
-  // 如果已经是完整 URL（含协议），直接解析提取 pathname
-  if (baseUrl.includes("://")) {
-    try {
-      const url = new URL(baseUrl);
-      return url.pathname === "/" ? "" : url.pathname.replace(/^\//, "");
-    } catch {
-      return "";
-    }
-  }
-  // 不含协议但含 /（如 "localhost/demo-region"），补全 https:// 后用 URL 解析
-  if (baseUrl.includes("/")) {
-    try {
-      const url = new URL(`https://${baseUrl}`);
-      return url.pathname === "/" ? "" : url.pathname.replace(/^\//, "");
-    } catch {
-      // 解析失败，fall through
-    }
-  }
-  // 否则作为纯路径返回（去掉开头和结尾的 /）
-  return baseUrl.replace(/^\//, "").replace(/\/$/, "");
-}
 
 export interface D3Config {
   drag: boolean;
@@ -116,35 +89,11 @@ const defaultOptions: GraphOptions = {
     startCollapsed: false,
     countLabelMaxDisplay: 120,
   },
-  globalGraph: {
-    drag: true,
-    zoom: true,
-    depth: -1,
-    scale: 0.9,
-    repelForce: 0.5,
-    centerForce: 0.2,
-    linkDistance: 30,
-    fontSize: 0.6,
-    opacityScale: 1,
-    showTags: true,
-    removeTags: [],
-    focusOnHover: true,
-    enableRadial: true,
-    showArrows: true,
-    filterOrphans: true,
-    startCollapsed: true,
-    countLabelMin: 7,
-    countLabelMaxDisplay: 120,
-    coreNodeLimit: 100,
-    filterNonCoreNodes: true,
-    expandCoresOnRegionOpen: false,
-  },
 };
 
 export default ((userOpts?: Partial<GraphOptions>) => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
     const localGraph = { ...defaultOptions.localGraph, ...userOpts?.localGraph };
-    const globalGraph = { ...defaultOptions.globalGraph, ...userOpts?.globalGraph };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed = depth > 0 && depth <= precomputeDepth，
@@ -189,22 +138,11 @@ export default ((userOpts?: Partial<GraphOptions>) => {
             </svg>
           </button>
         </div>
-        <div class="global-graph-outer">
-          <div
-            class="global-graph-container"
-            data-basepath={basePath}
-            data-cfg={JSON.stringify(globalGraph)}
-            data-global-cfg={JSON.stringify(globalGraph)}
-            data-shared-aggregation={String((cfg as unknown as { aggregation?: unknown }).aggregation !== undefined)}
-            data-precompute-depth={String(precomputeDepth)}
-          ></div>
-        </div>
       </div>
     );
   };
 
   Graph.css = style;
-  Graph.afterDOMLoaded = script;
 
   return Graph;
 }) satisfies QuartzComponentConstructor;

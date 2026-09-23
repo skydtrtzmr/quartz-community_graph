@@ -80,6 +80,26 @@ export function matchCoreNodeFilter(
 // ===== 公共工具函数 =====
 
 /**
+ * 由一组节点 slug 推「共同目录」：各自去掉末段文件名后取公共前缀；无公共目录时返回 ""。
+ *
+ * 用途：给聚合节点标注它所属的目录上下文（跳转维度值页时作为 `?scope=`）。
+ * 不做「更深一层也算同目录」的推断 —— 只有同一个目录里的成员才有确定的 scope。
+ */
+export function commonFolderOf(slugs: string[]): string {
+  const dirs = slugs.map((slug) => slug.split("/").slice(0, -1))
+  const first = dirs[0]
+  if (!first) return ""
+  let common = first.slice()
+  for (const dir of dirs.slice(1)) {
+    let index = 0
+    while (index < common.length && index < dir.length && common[index] === dir[index]) index++
+    common = common.slice(0, index)
+    if (common.length === 0) break
+  }
+  return common.join("/")
+}
+
+/**
  * 从 item 中提取聚合键值
  * @param item 数据项（需有 slug / frontmatter）
  * @param rule 聚合规则

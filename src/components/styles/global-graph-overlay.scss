@@ -1,0 +1,43 @@
+// 全局图谱宿主（GlobalGraphOverlay）样式。
+//
+// 该组件只渲染 `.global-graph-outer` 覆盖层容器，自身不占布局空间：
+// - `display: contents` 让宿主外壳在 flex 布局（header）里彻底消失，
+//   只留下下面这个 `position: fixed` 的覆盖层
+// - 覆盖层默认 `display: none`，`.active` 时才显示（由 graph.inline.ts 切换）
+
+.graph-overlay-host {
+  display: contents;
+
+  & > .global-graph-outer {
+    position: fixed;
+    z-index: 9999;
+    left: 0;
+    top: 0;
+    width: 100vw;
+    height: 100%;
+    backdrop-filter: blur(4px);
+    display: none;
+    overflow: hidden;
+
+    &.active {
+      display: inline-block;
+    }
+
+    & > .global-graph-container {
+      border: 1px solid var(--lightgray);
+      background-color: var(--light);
+      border-radius: 5px;
+      box-sizing: border-box;
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      height: 80vh;
+      width: 80vw;
+
+      @media all and (max-width: 800px) {
+        width: 90%;
+      }
+    }
+  }
+}

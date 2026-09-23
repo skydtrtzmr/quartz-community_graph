@@ -31,12 +31,14 @@ import {
   getFullSlug,
   resolveRelative,
   simplifySlug,
+  slugifyPath,
   getBasePath,
   getFullSlugFromUrl,
 } from "@quartz-community/utils"
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
-import { AggregationRule, matchCoreNodeFilter } from "../../util/aggregation"
+import { AggregationRule, commonFolderOf, matchCoreNodeFilter } from "../../util/aggregation"
+import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
@@ -68,6 +70,42 @@ interface LocalGraphData {
   nodes: Record<SimpleSlug, ContentDetails>
   edges: Array<{ source: SimpleSlug; target: SimpleSlug; sourceField?: string }>
   folderTitles?: Record<string, string>
+  /** 维度子图（aggregation-page-pro 产物）扩展：命中实体 + 各自所属目录上下文 */
+  matched?: Array<{ slug: string; scope: string }>
+}
+
+/**
+ * 维度值页图谱的默认调参（镜像 Graph.tsx 的 localGraph 默认值）。
+ * 维度页容器只声明 `data-dimension-graph` + 产物地址，其余 dataset 由脚本补齐。
+ */
+const DIMENSION_GRAPH_DEFAULTS = {
+  depth: 1,
+  scale: 1.1,
+  repelForce: 0.6,
+  centerForce: 0.3,
+  linkDistance: 70,
+  fontSize: 0.75,
+  opacityScale: 1,
+  showTags: false,
+  removeTags: [],
+  focusOnHover: false,
+  enableRadial: false,
+  drag: true,
+  zoom: true,
+}
+
+/** 拼接 basePath 与相对产物地址（basePath 允许带或不带前导斜杠） */
+function joinArtifactUrl(basePath: string, path: string): string {
+  const prefix = basePath ? (basePath.startsWith("/") ? basePath : `/${basePath}`) : ""
+  return `${prefix}/${path.replace(/^\//, "")}`
+}
+
+/** 逐段编码（保留 `/`），用于含中文取值的维度子图地址 */
+function encodePathSegments(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
 }
 
 // ============ Local Graph 缓存模块（供 graph2 和 Backlinks 共享）============
@@ -194,8 +232,13 @@ async function fetchGlobalGraphPrecomputed(
   }
 }
 
-async function fetchCachedLocalGraph(fullSlug: string, basePath: string): Promise<any | null> {
-  const cacheKey = `${basePath}:${fullSlug}`
+async function fetchCachedLocalGraph(
+  fullSlug: string,
+  basePath: string,
+  overrideUrl?: string,
+): Promise<any | null> {
+  // 容器显式指定了产物地址（维度值页）时，以该地址为准并单独缓存
+  const cacheKey = overrideUrl ? `url:${overrideUrl}` : `${basePath}:${fullSlug}`
 
   // 检查 Promise 缓存 - 命中则直接返回已有 Promise
   if (localGraphPromiseCache.has(cacheKey)) {
@@ -209,9 +252,11 @@ async function fetchCachedLocalGraph(fullSlug: string, basePath: string): Promis
     const hash = getLocalGraphHash(fullSlug)
     const dir1 = hash.slice(0, 2)
     const dir2 = hash.slice(2, 4)
-    const localGraphPath = basePath
-      ? `/${basePath}/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
-      : `/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
+    const localGraphPath = overrideUrl
+      ? encodePathSegments(joinArtifactUrl(basePath, overrideUrl))
+      : basePath
+        ? `/${basePath}/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
+        : `/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
 
     try {
       console.log("[LocalGraph Cache] Fetch:", localGraphPath)
@@ -424,7 +469,13 @@ function main() {
     // 全局图谱默认硬上限 100；局部图谱不设上限
     const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
 
-    basePath = graph.dataset.basepath || ""
+    // 约定：basePath 不带前导斜杠（Graph 组件用 getBasePath 去掉；注入宿主取自 body[data-basepath] 会带），
+    // 这里统一裁掉，避免拼出 `//<域>/graph/...` 这类 404 路径
+    basePath = (graph.dataset.basepath || "").replace(/^\//, "")
+
+    // 维度值页：容器自带产物地址（graph/dimensions/**），并由脚本按 URL 参数裁剪
+    const localGraphUrl = graph.dataset["localGraphUrl"] || undefined
+    const isDimensionGraph = graph.dataset["dimensionGraph"] !== undefined
 
     // Stage 2: local graph consumes the shared artifact, including subsequent expansion.
     // The dataset only enables loading; rule values come exclusively from the JSON.
@@ -457,10 +508,32 @@ function main() {
       console.log("[Graph] ===== ATTEMPTING TO LOAD LOCAL GRAPH JSON (priority) =====")
       try {
         if (!checkGeneration(generation)) return () => {}
-        const pdata = await fetchCachedLocalGraph(fullSlug, basePath)
+        const pdata = await fetchCachedLocalGraph(fullSlug, basePath, localGraphUrl)
         if (!checkGeneration(generation)) return () => {}
         if (pdata && (pdata as any).depth >= depth) {
           localGraphData = pdata as LocalGraphData
+          // 维度子图：按 ?scope=（目录前缀）与 ?context=（来源节点一跳）裁剪，
+          // 必须在下面构建 neighbourhood/links 之前完成，这样后续所有派生结构都一致
+          if (isDimensionGraph) {
+            const params = new URLSearchParams(window.location.search)
+            const filtered = filterDimensionGraph(localGraphData, {
+              scope: params.get("scope") ?? "",
+              context: params.get("context") ?? "",
+            })
+            // ⚠️ 必须浅拷贝：fetchCachedLocalGraph 返回的是 Promise 缓存里的**同一个对象**，
+            // 原地裁剪会让第二次裁剪作用在已裁剪的数据上（切回 scope 后图谱越裁越空）
+            localGraphData = {
+              ...localGraphData,
+              nodes: filtered.nodes as typeof localGraphData.nodes,
+              edges: filtered.edges as typeof localGraphData.edges,
+            }
+            // 调试用：把裁剪后的规模写到容器上，便于排查「参数是否真的生效」
+            graph.dataset["dimensionNodeCount"] = String(Object.keys(filtered.nodes).length)
+            graph.dataset["dimensionEdgeCount"] = String(filtered.edges.length)
+            console.log(
+              `[Graph] 维度子图裁剪：scope=${params.get("scope") ?? "-"} context=${params.get("context") ?? "-"} -> ${Object.keys(filtered.nodes).length} 节点 / ${filtered.edges.length} 边`,
+            )
+          }
           const nodeCount = Object.keys(localGraphData.nodes).length
           console.log(
             `[Graph] ===== SUCCESS: Loaded local JSON with ${nodeCount} nodes, ${localGraphData.edges.length} edges =====`,
@@ -567,6 +640,106 @@ function main() {
       childLinks: LinkData[]
       remainingRules: AggregationRule[]
       currentField: string
+      /** 产生该聚合的规则（double-click 跳转时决定目标页类型） */
+      rule: AggregationRule
+      /** 该聚合所属的目录上下文（成员共同目录；无共同目录为 ""） */
+      scope: string
+      /** 该聚合的分组键（folder 规则时即目录路径，用于跳转文件夹页） */
+      groupKey?: string
+    }
+
+    /** 从聚合节点 id 里取分组键（仅预计算产物的节点需要，其余构造点都有 groupKey） */
+    function aggGroupKeyOf(id: string): string {
+      if (id.startsWith("agg:shared:")) {
+        try {
+          const parsed = JSON.parse(id.slice("agg:shared:".length))
+          const key = Array.isArray(parsed) ? parsed[2] : undefined
+          return typeof key === "string" ? key : ""
+        } catch {
+          return ""
+        }
+      }
+      const parts = id.split(":")
+      return parts.length >= 5 ? parts.slice(4).join(":") : ""
+    }
+
+    /** 站点根前缀（basePath 可能带或不带前导斜杠） */
+    function siteRoot(): string {
+      if (!basePath) return ""
+      return basePath.startsWith("/") ? basePath : `/${basePath}`
+    }
+
+    /**
+     * 维度子图的 slug 清单（懒加载 + 缓存）。
+     * 取值 slug 会做冲突消解，运行期无法靠 slugify 复现，所以清单以构建期为准；
+     * 拿不到清单时回退到 slugifyPath（绝大多数取值一致）。
+     */
+    let dimensionManifestPromise: Promise<any | null> | null = null
+    function loadDimensionManifest(): Promise<any | null> {
+      if (!dimensionManifestPromise) {
+        const url = encodePathSegments(joinArtifactUrl(basePath, "graph/dimensions/index.json"))
+        dimensionManifestPromise = fetch(url)
+          .then((response) => (response.ok ? response.json() : null))
+          .catch(() => null)
+      }
+      return dimensionManifestPromise
+    }
+
+    /**
+     * 聚合节点双击的跳转目标（站点相对路径）：
+     * - `field` 规则 → 维度值页 `/_dimensions/<fieldSlug>/<valueSlug>?scope=&context=`
+     * - `folder` 规则 → 既有文件夹页 `/<目录>/`（不产新页）
+     */
+    async function resolveAggregationTarget(nodeId: SimpleSlug): Promise<string | null> {
+      const info = aggNodeInfoMap.get(nodeId)
+      if (!info) return null
+      const isFolder = info.rule ? info.rule.type === "folder" : info.currentField === "📁"
+
+      if (isFolder) {
+        const key = (info.groupKey ?? "").replace(/^\/+|\/+$/g, "")
+        const root = siteRoot()
+        return key ? `${root}/${encodePathSegments(key)}/` : `${root}/`
+      }
+
+      const field = info.rule && info.rule.type === "field" ? info.rule.field : info.currentField
+      const value = info.groupKey ?? ""
+      if (!field || field === "📁" || !value) return null
+
+      const manifest = await loadDimensionManifest()
+      const manifestField = manifest?.fields?.find(
+        (entry: { field: string }) => entry.field === field,
+      )
+      const manifestValue = manifestField?.values?.find(
+        (entry: { value: string }) => entry.value === value,
+      )
+      const fieldSlug: string = manifestField?.fieldSlug ?? slugifyPath(field)
+      const valueSlug: string = manifestValue?.valueSlug ?? slugifyPath(value)
+
+      const params = new URLSearchParams()
+      if (info.scope) params.set("scope", info.scope)
+      const fromSlug = simplifySlug(getFullSlug(window))
+      if (fromSlug) params.set("context", fromSlug)
+
+      const target = `${siteRoot()}/_dimensions/${encodePathSegments(fieldSlug)}/${encodePathSegments(valueSlug)}`
+      const query = params.toString()
+      return query ? `${target}?${query}` : target
+    }
+
+    /** 统一节点跳转：普通节点 → 文档；聚合节点 → 维度值页 / 文件夹页；大区节点不跳转 */
+    function navigateToNode(nodeId: SimpleSlug, fullSlug: FullSlug): void {
+      if (nodeId.startsWith("agg:")) {
+        void resolveAggregationTarget(nodeId).then((target) => {
+          if (target) window.spaNavigate(new URL(target, window.location.origin))
+          else console.log("[Graph] 聚合节点没有可跳转的目标页:", nodeId)
+        })
+        return
+      }
+      if (nodeId.startsWith("region:")) {
+        console.log("[Graph] 大区节点暂不支持跳转:", nodeId)
+        return
+      }
+      const targ = resolveRelative(fullSlug, nodeId)
+      window.spaNavigate(new URL(targ, window.location.toString()))
     }
     let aggNodeInfoMap: Map<SimpleSlug, AggregationNodeInfo> = new Map()
 
@@ -589,7 +762,17 @@ function main() {
         const memberIds = new Set(group.members.map(n => n.id))
         const childLinks = allLinks.filter(l => memberIds.has(l.source.id) || memberIds.has(l.target.id))
         const currentField = rule.type === "folder" ? "📁" : rule.field
-        aggNodeInfoMap.set(id, { node, coreId: parent.id, childNodes: group.members, childLinks, remainingRules, currentField })
+        aggNodeInfoMap.set(id, {
+          node,
+          coreId: parent.id,
+          childNodes: group.members,
+          childLinks,
+          remainingRules,
+          currentField,
+          rule,
+          scope: commonFolderOf(group.members.map((member) => String(member.id))),
+          groupKey: key,
+        })
         aggNodeToChildNodes.set(id, group.members)
         aggNodeToChildLinks.set(id, childLinks)
         aggToCoreMap.set(id, parent.id)
@@ -725,6 +908,12 @@ function main() {
           childLinks: childLinkData,
           remainingRules: info.remainingRules,
           currentField: info.currentField,
+          // 旧产物里没有 rule/scope：scope 由成员反推，rule 缺失时跳转逻辑回退用 currentField
+          rule: (info as { rule?: AggregationRule }).rule,
+          scope:
+            (info as { scope?: string }).scope ??
+            commonFolderOf(childNodeData.map((child) => String(child.id))),
+          groupKey: (info as { groupKey?: string }).groupKey ?? aggGroupKeyOf(aggId as string),
         })
         aggNodeToChildNodes.set(aggId as SimpleSlug, childNodeData)
         aggNodeToChildLinks.set(aggId as SimpleSlug, childLinkData)
@@ -1272,6 +1461,9 @@ function main() {
                 childLinks: childLinkSet,
                 remainingRules: rules.slice(ruleIdx + 1),
                 currentField: rule.type === "folder" ? "📁" : (rule.field ?? rule.type),
+                rule,
+                scope: commonFolderOf(childNodes.map((child) => String(child.id))),
+                groupKey,
               })
               nonOrphanNodes.push(aggNode)
             }
@@ -2418,6 +2610,9 @@ function main() {
                     effectiveRule.type === "folder"
                       ? "📁"
                       : (effectiveRule.field ?? effectiveRule.type),
+                  rule: effectiveRule,
+                  scope: commonFolderOf(groupCores.map((child) => String(child.id))),
+                  groupKey,
                 })
 
                 nodesToAdd.push(subAggNode)
@@ -2647,6 +2842,9 @@ function main() {
                     effectiveRule.type === "folder"
                       ? "📁"
                       : (effectiveRule.field ?? effectiveRule.type),
+                  rule: effectiveRule,
+                  scope: commonFolderOf(groupLeaves.map((child) => String(child.id))),
+                  groupKey,
                 })
 
                 edgeNodesToAdd.push(subAggNode)
@@ -3151,22 +3349,28 @@ function main() {
               const now = Date.now()
               if (isGlobalGraph) {
                 if (lastClickedNodeId === nodeId && now - lastClickTime < DOUBLE_CLICK_DELAY) {
-                  const targ = resolveRelative(fullSlug, nodeId)
-                  window.spaNavigate(new URL(targ, window.location.toString()))
                   lastClickedNodeId = null
                   lastClickTime = 0
+                  navigateToNode(nodeId, fullSlug)
                 } else {
                   lastClickedNodeId = nodeId
                   lastClickTime = now
                   toggleNodeExpansion(nodeId)
                 }
               } else {
-                // 局部图谱：聚合节点点击展开/收起，普通节点跳转导航
+                // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转（与全局图谱同款去抖）
                 if (nodeId.startsWith("agg:")) {
-                  toggleNodeExpansion(nodeId)
+                  if (lastClickedNodeId === nodeId && now - lastClickTime < DOUBLE_CLICK_DELAY) {
+                    lastClickedNodeId = null
+                    lastClickTime = 0
+                    navigateToNode(nodeId, fullSlug)
+                  } else {
+                    lastClickedNodeId = nodeId
+                    lastClickTime = now
+                    toggleNodeExpansion(nodeId)
+                  }
                 } else {
-                  const targ = resolveRelative(fullSlug, nodeId)
-                  window.spaNavigate(new URL(targ, window.location.toString()))
+                  navigateToNode(nodeId, fullSlug)
                 }
               }
             }
@@ -3181,8 +3385,7 @@ function main() {
             if (clickTimeout) {
               clearTimeout(clickTimeout)
               clickTimeout = null
-              const targ = resolveRelative(fullSlug, nodeId)
-              window.spaNavigate(new URL(targ, window.location.toString()))
+              navigateToNode(nodeId, fullSlug)
             } else {
               clickTimeout = setTimeout(() => {
                 clickTimeout = null
@@ -3190,12 +3393,20 @@ function main() {
               }, DOUBLE_CLICK_DELAY)
             }
           } else {
-            // 局部图谱：聚合节点点击展开/收起，普通节点跳转导航
+            // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转
             if (nodeId.startsWith("agg:")) {
-              toggleNodeExpansion(nodeId)
+              if (clickTimeout) {
+                clearTimeout(clickTimeout)
+                clickTimeout = null
+                navigateToNode(nodeId, fullSlug)
+              } else {
+                clickTimeout = setTimeout(() => {
+                  clickTimeout = null
+                  toggleNodeExpansion(nodeId)
+                }, DOUBLE_CLICK_DELAY)
+              }
             } else {
-              const targ = resolveRelative(fullSlug, nodeId)
-              window.spaNavigate(new URL(targ, window.location.toString()))
+              navigateToNode(nodeId, fullSlug)
             }
           }
         })
@@ -3471,6 +3682,45 @@ function main() {
     cleanupGlobalGraphs()
   })
 
+  /**
+   * 维度值页的容器（由 aggregation-page-pro 生成）只声明 `data-dimension-graph` + 产物地址，
+   * 这里补齐 graph-pro 接管所需的 class 与 dataset；调参用本插件默认值，避免两插件强耦合。
+   */
+  function prepareDimensionContainers() {
+    const containers = document.querySelectorAll<HTMLElement>("[data-dimension-graph]")
+    for (const container of containers) {
+      if (container.classList.contains("graph-container")) continue
+      const overrideUrl =
+        container.dataset["dimensionGraphUrl"] || container.dataset["localGraphUrl"]
+      container.classList.add("graph-container")
+      container.dataset["basepath"] = document.body?.dataset?.basepath ?? ""
+      container.dataset["cfg"] = JSON.stringify(DIMENSION_GRAPH_DEFAULTS)
+      container.dataset["precomputeDepth"] = "1"
+      container.dataset["sharedAggregation"] = "false"
+      if (overrideUrl) container.dataset["localGraphUrl"] = overrideUrl
+      console.log("[Graph] 维度值页图谱容器已就绪:", overrideUrl)
+    }
+  }
+
+  /** 维度值页切换 scope 后（我们的列表脚本派发事件）：只重建维度子图 */
+  async function rerenderDimensionGraphs() {
+    const containers = [...document.querySelectorAll<HTMLElement>("[data-dimension-graph]")]
+    if (containers.length === 0) return
+    cleanupLocalGraphs()
+    const thisGeneration = renderGeneration
+    for (const container of containers) {
+      const cleanup = await renderGraph(container, getFullSlug(window), thisGeneration)
+      if (cleanup) {
+        if (thisGeneration === renderGeneration) localGraphCleanups.push(cleanup)
+        else cleanup()
+      }
+    }
+  }
+
+  document.addEventListener("aggregation-scope-changed", () => {
+    void rerenderDimensionGraphs()
+  })
+
   document.addEventListener("nav", async (e: CustomEventMap["nav"]) => {
     const slug = e.detail.url
     // prescript.js 在 <head> 中执行，此时 body 的 data-slug 可能尚未解析
@@ -3478,8 +3728,42 @@ function main() {
     addToVisited(simplifySlug(slug))
     ensureFetchData()
 
+    // ===== 全局图谱交互：先接上，避免被局部图谱渲染（fetch + pixi）拖后 =====
+    // 按钮与覆盖层都由 `GlobalGraphOverlay` 组件在**构建期**渲染：与阅读模式按钮一样常驻，
+    // 不会出现"先空、加载后才冒出来"的闪烁。脚本只负责绑定交互。
+    const toggleButtons = [...document.getElementsByClassName("graph-toggle")] as HTMLElement[]
+    for (const btn of toggleButtons) {
+      const onToggleClick = (e: MouseEvent) => {
+        e.preventDefault()
+        const anyOpen = globalContainers().some((c) => c.classList.contains("active"))
+        if (anyOpen) {
+          hideGlobalGraph()
+        } else {
+          renderGlobalGraph()
+        }
+      }
+      btn.addEventListener("click", onToggleClick)
+      window.addCleanup(() => btn.removeEventListener("click", onToggleClick))
+    }
+
+    // 侧栏「放大局部图谱」图标（Graph 组件渲染）→ 复用局部配置打开全局图谱
+    const containerIcons = document.getElementsByClassName("global-graph-icon")
+    Array.from(containerIcons).forEach((icon) => {
+      const expandLocalGraph = () => renderGlobalGraph(true)
+      icon.addEventListener("click", expandLocalGraph)
+      window.addCleanup(() => icon.removeEventListener("click", expandLocalGraph))
+    })
+
+    document.addEventListener("keydown", shortcutHandler)
+    window.addCleanup(() => {
+      document.removeEventListener("keydown", shortcutHandler)
+      cleanupLocalGraphs()
+      cleanupGlobalGraphs()
+    })
+
     async function renderLocalGraph() {
       const thisGeneration = renderGeneration
+      prepareDimensionContainers()
       const localGraphContainers = document.getElementsByClassName("graph-container")
       for (const container of localGraphContainers) {
         const cleanup = await renderGraph(container as HTMLElement, slug, thisGeneration)
@@ -3505,12 +3789,16 @@ function main() {
     document.addEventListener("themechange", handleThemeChange)
     window.addCleanup(() => document.removeEventListener("themechange", handleThemeChange))
 
-    const containers = [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+    // 动态查询全局图谱容器：容器由 GlobalGraphOverlay 组件渲染（layout 放在 header，任何页面类型都在），
+    // 这里按需查询而不是快照，SPA 导航后无需重建引用
+    function globalContainers(): HTMLElement[] {
+      return [...document.getElementsByClassName("global-graph-outer")] as HTMLElement[]
+    }
 
     async function renderGlobalGraph(local = false) {
       const thisGeneration = renderGeneration
       const currentSlug = getFullSlug(window)
-      for (const container of containers) {
+      for (const container of globalContainers()) {
         container.classList.add("active")
         const sidebar = container.closest(".sidebar") as HTMLElement
         if (sidebar) sidebar.style.zIndex = "1"
@@ -3518,11 +3806,14 @@ function main() {
         registerEscapeHandler(container, hideGlobalGraph)
         if (graphContainer) {
           // 放大按钮复用当前页面的局部配置；快捷键仍可打开全局图谱。
-          const localContainer = container
-            .closest(".graph")
-            ?.querySelector<HTMLElement>(".graph-container")
+          // 覆盖层容器现在挂在 header（不一定是局部图谱的兄弟节点），所以按全页查询局部图谱容器
+          const localContainer = document.querySelector<HTMLElement>(".graph .graph-container")
           if (local) {
-            graphContainer.dataset.sharedAggregation = localContainer?.dataset.sharedAggregation ?? "false"
+            // 优先取局部容器上的声明；无局部图谱的页面（注入宿主）沿用宿主自带的站点级声明
+            graphContainer.dataset.sharedAggregation =
+              localContainer?.dataset.sharedAggregation ??
+              graphContainer.dataset.sharedAggregation ??
+              "false"
             const localConfig = JSON.parse(
               localContainer?.dataset.cfg ?? graphContainer.dataset.globalCfg ?? "{}",
             ) as D3Config
@@ -3532,7 +3823,10 @@ function main() {
               fontSize: (localConfig.fontSize ?? 0.6) * 1.25,
             })
           } else {
-            graphContainer.dataset.sharedAggregation = localContainer?.dataset.sharedAggregation ?? "false"
+            graphContainer.dataset.sharedAggregation =
+              localContainer?.dataset.sharedAggregation ??
+              graphContainer.dataset.sharedAggregation ??
+              "false"
             graphContainer.dataset.cfg = graphContainer.dataset.globalCfg
           }
           const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration)
@@ -3550,7 +3844,7 @@ function main() {
 
     function hideGlobalGraph() {
       cleanupGlobalGraphs()
-      for (const container of containers) {
+      for (const container of globalContainers()) {
         container.classList.remove("active")
         const sidebar = container.closest(".sidebar") as HTMLElement
         if (sidebar) sidebar.style.zIndex = ""
@@ -3560,65 +3854,10 @@ function main() {
     async function shortcutHandler(e: HTMLElementEventMap["keydown"]) {
       if (e.key === "g" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
         e.preventDefault()
-        const anyOpen = containers.some((c) => c.classList.contains("active"))
+        const anyOpen = globalContainers().some((c) => c.classList.contains("active"))
         anyOpen ? hideGlobalGraph() : renderGlobalGraph()
       }
     }
-
-    const containerIcons = document.getElementsByClassName("global-graph-icon")
-    Array.from(containerIcons).forEach((icon) => {
-      const expandLocalGraph = () => renderGlobalGraph(true)
-      icon.addEventListener("click", expandLocalGraph)
-      window.addCleanup(() => icon.removeEventListener("click", expandLocalGraph))
-    })
-
-    // ===== 全局图谱按钮：与阅读模式按钮并列（视口右上角），点击等价 Ctrl/⌘+G =====
-    // 说明：按钮以 DOM 注入方式放在 .page-header 内，视觉位置由 .graph-toggle 的
-    // position:fixed 决定（与 .readermode 同一套定位规则，向左错开一格）。
-    function ensureGlobalGraphToggle() {
-      const header =
-        (document.querySelector(".page-header > header") as HTMLElement | null) ??
-        (document.querySelector(".page-header") as HTMLElement | null)
-      if (!header) return
-      if (header.querySelector(".graph-toggle")) return
-
-      const btn = document.createElement("button")
-      btn.className = "graph-toggle"
-      btn.setAttribute("type", "button")
-      btn.setAttribute("aria-label", "全局图谱")
-      btn.title = "全局图谱（Ctrl/⌘+G）"
-      // 图标刻意与侧栏「放大局部图谱」的节点网络图标区分：这里用地球（"全局"语义），
-      // 且采用描边风格（fill:none）以便与实心图标一眼可分。
-      btn.innerHTML = `
-        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" stroke-width="1.8"
-             stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="12" cy="12" r="9" />
-          <ellipse cx="12" cy="12" rx="4.2" ry="9" />
-          <path d="M3.4 9h17.2M3.4 15h17.2" />
-        </svg>`
-
-      const onToggleClick = (e: MouseEvent) => {
-        e.preventDefault()
-        const anyOpen = containers.some((c) => c.classList.contains("active"))
-        if (anyOpen) {
-          hideGlobalGraph()
-        } else {
-          renderGlobalGraph()
-        }
-      }
-      btn.addEventListener("click", onToggleClick)
-      header.appendChild(btn)
-      window.addCleanup(() => btn.removeEventListener("click", onToggleClick))
-    }
-    ensureGlobalGraphToggle()
-
-    document.addEventListener("keydown", shortcutHandler)
-    window.addCleanup(() => {
-      document.removeEventListener("keydown", shortcutHandler)
-      cleanupLocalGraphs()
-      cleanupGlobalGraphs()
-    })
 
     console.log("[DEBUG] nav 事件处理完成，图谱初始化全部完成")
   })

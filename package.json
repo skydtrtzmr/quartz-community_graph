@@ -153,6 +153,11 @@
         "displayName": "Graph",
         "defaultPosition": "right",
         "defaultPriority": 10
+      },
+      "GlobalGraphOverlay": {
+        "displayName": "Global Graph Overlay",
+        "defaultPosition": "header",
+        "defaultPriority": 30
       }
     }
   },

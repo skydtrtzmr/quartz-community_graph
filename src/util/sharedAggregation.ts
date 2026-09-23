@@ -21,7 +21,7 @@ export function readSharedAggregation(value: unknown): SharedAggregation {
     a.version !== 1 ||
     typeof a.configHash !== "string" ||
     !Number.isInteger(a.minGroupSize) ||
-    a.minGroupSize < 2 ||
+    a.minGroupSize < 1 ||
     a.root?.type !== "folder" ||
     !validRule(a.root) ||
     !a.resolved ||
