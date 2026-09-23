@@ -15,10 +15,7 @@ export function readSharedAggregation(value: unknown): SharedAggregation {
     !!r &&
     (r.type === "folder"
       ? Number.isInteger(r.depth ?? 1) && (r.depth ?? 1) > 0
-      : (r.type === "field" || r.type === "date") &&
-        typeof r.field === "string" &&
-        r.field.trim().length > 0 &&
-        (r.type !== "date" || ["year", "month", "quarter"].includes(r.granularity ?? "")));
+      : r.type === "field" && typeof r.field === "string" && r.field.trim().length > 0);
   if (
     !a ||
     a.version !== 1 ||
@@ -65,17 +62,10 @@ function keyFor(item: AggregationItem, rule: AggregationRule): string | null {
         .join("/") || "/"
     );
   }
+  if (rule.type !== "field") return null;
   const raw = firstValue(item.frontmatter?.[rule.field!]);
   if (raw === undefined) return null;
-  if (rule.type === "field") return String(raw);
-  if (typeof raw !== "string" && typeof raw !== "number") return null;
-  const date = new Date(raw);
-  if (Number.isNaN(date.getTime())) return null;
-  const year = date.getUTCFullYear();
-  const month = date.getUTCMonth() + 1;
-  if (rule.granularity === "year") return `${year}年`;
-  if (rule.granularity === "quarter") return `${year}-Q${Math.ceil(month / 3)}`;
-  return `${year}年${month}月`;
+  return String(raw);
 }
 
 /** One level shared by build and runtime. Each directory/branch groups all categories or none. */

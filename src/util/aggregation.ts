@@ -2,25 +2,22 @@
  * 聚合配置公共类型和工具函数（自 v4 client/quartz/util/aggregation.ts 整体移植）
  *
  * 设计原则：
- * - folder、field、date 都是聚合维度，统一为规则列表
+ * - folder、field 都是聚合维度，统一为规则列表
  * - 按 order 排序后顺序执行
  * - 每条规则独立配置，fallback 行为内聚在规则内部
  */
 
-export type AggregationType = "folder" | "field" | "date"
+export type AggregationType = "folder" | "field"
 
 export interface AggregationRule {
   /** 聚合维度类型 */
   type: AggregationType
 
-  /** 字段名（field/date 用，folder 可省略） */
+  /** 字段名（field 用，folder 可省略） */
   field?: string
 
   /** 文件夹截取深度（仅 folder 有效） */
   depth?: number
-
-  /** 日期粒度（仅 date 有效） */
-  granularity?: "year" | "month" | "quarter"
 }
 
 /** 聚合配置：规则列表 */
@@ -83,34 +80,6 @@ export function matchCoreNodeFilter(
 // ===== 公共工具函数 =====
 
 /**
- * 按 granularity 格式化日期值
- * 返回统一格式字符串，供聚合分组键使用
- */
-export function formatDateKey(value: unknown, granularity?: string): string {
-  if (!granularity) return String(value ?? "(无)")
-
-  let date: Date | null = null
-  if (typeof value === "string" || typeof value === "number") {
-    date = new Date(value)
-  }
-  if (!date || isNaN(date.getTime())) return String(value ?? "(无)")
-
-  const y = date.getFullYear()
-  const m = date.getMonth() + 1
-
-  switch (granularity) {
-    case "year":
-      return `${y}年`
-    case "month":
-      return `${y}年${m}月`
-    case "quarter":
-      return `${y}-Q${Math.ceil(m / 3)}`
-    default:
-      return String(value ?? "(无)")
-  }
-}
-
-/**
  * 从 item 中提取聚合键值
  * @param item 数据项（需有 slug / frontmatter）
  * @param rule 聚合规则
@@ -140,17 +109,6 @@ export function extractGroupKey(
         return first !== undefined ? String(first) : null
       }
       return String(raw)
-    }
-
-    case "date": {
-      const field = rule.field || "date"
-      let raw = item.frontmatter?.[field]
-      // fallback: 若指定字段不存在，尝试通用 date / modified
-      if ((raw === undefined || raw === null) && field !== "date") {
-        raw = item.frontmatter?.["date"]
-      }
-      if (raw === undefined || raw === null) return null
-      return formatDateKey(raw, rule.granularity)
     }
 
     default:

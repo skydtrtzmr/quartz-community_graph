@@ -10,7 +10,7 @@ const artifact: SharedAggregation = {
   resolved: {
     任务: [
       { type: "field", field: "status" },
-      { type: "date", field: "date", granularity: "month" },
+      { type: "field", field: "date" },
     ],
     问答: [],
   },
@@ -75,17 +75,25 @@ describe("shared local aggregation", () => {
     ]);
   });
 
-  it("skips all missing values and uses explicit date field without fallback", () => {
+  it("groups by raw field value with no implicit date formatting", () => {
     const items = [
       note("任务/a", { date: ["2026-09-01"] }),
       note("任务/b", { date: "2026-09-02" }),
     ];
-    expect(groupShared(items, artifact, identity).groups[0].key).toBe("2026年9月");
+    // 日期不再有隐式粒度：原值即分组键，两个不同取值各成一组、未达阈值 → 整层不聚合
     expect(
-      groupShared(items, artifact, identity, [
-        { type: "date", field: "deadline", granularity: "year" },
-      ]).groups,
+      groupShared(items, artifact, identity, [{ type: "field", field: "date" }]).groups,
     ).toEqual([]);
+    // 同值两项达到阈值 → 按原值成组
+    expect(
+      groupShared(
+        [note("任务/a", { date: "2026年9月" }), note("任务/b", { date: "2026年9月" })],
+        artifact,
+        identity,
+        [{ type: "field", field: "date" }],
+      ).groups.map((g) => g.key),
+    ).toEqual(["2026年9月"]);
+    // 字段缺失时规则不产生分组
     expect(groupShared([note("任务/a"), note("任务/b")], artifact, identity).groups).toEqual([]);
   });
 

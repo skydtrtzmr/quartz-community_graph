@@ -1180,23 +1180,6 @@ function main() {
                   } else {
                     groupKey = "/"
                   }
-                } else if (rule.type === "date") {
-                  const field = rule.field || "date"
-                  const dateStr =
-                    (nodeDetails as any).frontmatter?.[field] ?? (nodeDetails as any).date
-                  if (dateStr) {
-                    const d = new Date(dateStr)
-                    if (!isNaN(d.getTime())) {
-                      hasValidValue = true
-                      const y = d.getFullYear()
-                      const m = d.getMonth() + 1
-                      if (rule.granularity === "year") groupKey = `${y}年`
-                      else if (rule.granularity === "month") groupKey = `${y}年${m}月`
-                      else if (rule.granularity === "quarter")
-                        groupKey = `${y}-Q${Math.ceil(m / 3)}`
-                      else groupKey = `${y}年${m}月`
-                    }
-                  }
                 } else if (rule.type === "field") {
                   const field = rule.field ?? ""
                   const rawValue = (nodeDetails as any).frontmatter?.[field]
@@ -1391,20 +1374,6 @@ function main() {
                 groupKey = folderParts.join("/")
               } else {
                 groupKey = "/"
-              }
-            } else if (rule.type === "date") {
-              const field = rule.field || "date"
-              const dateStr = (details as any).frontmatter?.[field] ?? (details as any).date
-              if (dateStr) {
-                const d = new Date(dateStr)
-                if (!isNaN(d.getTime())) {
-                  const y = d.getFullYear()
-                  const m = d.getMonth() + 1
-                  if (rule.granularity === "year") groupKey = `${y}年`
-                  else if (rule.granularity === "month") groupKey = `${y}年${m}月`
-                  else if (rule.granularity === "quarter") groupKey = `${y}-Q${Math.ceil(m / 3)}`
-                  else groupKey = `${y}年${m}月`
-                }
               }
             } else if (rule.type === "field") {
               const field = rule.field ?? ""
@@ -2369,22 +2338,6 @@ function main() {
                     } else {
                       groupKey = "/"
                     }
-                  } else if (rule.type === "date") {
-                    const field = rule.field || "date"
-                    const dateStr = (details as any).frontmatter?.[field] ?? (details as any).date
-                    if (dateStr) {
-                      const d = new Date(dateStr)
-                      if (!isNaN(d.getTime())) {
-                        hasValidValue = true
-                        const y = d.getFullYear()
-                        const m = d.getMonth() + 1
-                        if (rule.granularity === "year") groupKey = `${y}年`
-                        else if (rule.granularity === "month") groupKey = `${y}年${m}月`
-                        else if (rule.granularity === "quarter")
-                          groupKey = `${y}-Q${Math.ceil(m / 3)}`
-                        else groupKey = `${y}年${m}月`
-                      }
-                    }
                   } else if (rule.type === "field") {
                     const field = rule.field ?? ""
                     const rawValue = (details as any).frontmatter?.[field]
@@ -2612,22 +2565,6 @@ function main() {
                       groupKey = folderParts.join("/")
                     } else {
                       groupKey = "/"
-                    }
-                  } else if (rule.type === "date") {
-                    const field = rule.field || "date"
-                    const dateStr = (details as any).frontmatter?.[field] ?? (details as any).date
-                    if (dateStr) {
-                      const d = new Date(dateStr)
-                      if (!isNaN(d.getTime())) {
-                        hasValidValue = true
-                        const y = d.getFullYear()
-                        const m = d.getMonth() + 1
-                        if (rule.granularity === "year") groupKey = `${y}年`
-                        else if (rule.granularity === "month") groupKey = `${y}年${m}月`
-                        else if (rule.granularity === "quarter")
-                          groupKey = `${y}-Q${Math.ceil(m / 3)}`
-                        else groupKey = `${y}年${m}月`
-                      }
                     }
                   } else if (rule.type === "field") {
                     const field = rule.field ?? ""
