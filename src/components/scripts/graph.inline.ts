@@ -931,6 +931,10 @@ function main() {
         aggNodeToChildLinks.set(aggId as SimpleSlug, childLinkData)
         aggToCoreMap.set(aggId as SimpleSlug, info.coreId as SimpleSlug)
       }
+      // 把预计算路径构建的聚合 info 写回**全局** map。
+      // ⚠️ 之前这里只写进了局部变量 `aggInfoMap` 且从未回填 → 全局图谱的聚合节点在
+      // `resolveAggregationTarget` 里 `aggNodeInfoMap.get()` 永远取不到 → 双击静默无跳转。
+      for (const [aggId, info] of aggInfoMap) aggNodeInfoMap.set(aggId, info)
       // regionNodeInfoMap
       for (const [regionId, info] of Object.entries(pc.regionNodes)) {
         const childCores = (info.childCoreIds as string[])

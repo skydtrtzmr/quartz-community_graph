@@ -51,6 +51,18 @@ function firstValue(value: unknown): unknown {
   return Array.isArray(value) ? value.find(present) : present(value) ? value : undefined;
 }
 
+/**
+ * 把 `[[target]]` / `[[target|display]]` 剥离为纯文本（display 优先，否则 target）。
+ * 让 wikilink 型字段（如「负责人」）用于聚合时显示为纯文本，而不是 `[[...]]`。
+ */
+function stripWikilink(value: string): string {
+  const match = value.match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]$/);
+  if (!match) return value;
+  const target = match[1] ?? "";
+  const display = match[2] ?? "";
+  return display.trim() || target.trim();
+}
+
 function keyFor(item: AggregationItem, rule: AggregationRule): string | null {
   if (rule.type === "folder") {
     // Use the full source slug: simplified folder/index slugs lose the last component.
@@ -65,7 +77,7 @@ function keyFor(item: AggregationItem, rule: AggregationRule): string | null {
   if (rule.type !== "field") return null;
   const raw = firstValue(item.frontmatter?.[rule.field!]);
   if (raw === undefined) return null;
-  return String(raw);
+  return stripWikilink(String(raw));
 }
 
 /** One level shared by build and runtime. Each directory/branch groups all categories or none. */
