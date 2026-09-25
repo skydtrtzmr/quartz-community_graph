@@ -91,7 +91,7 @@ const defaultOptions: GraphOptions = {
   },
 };
 
-export default ((userOpts?: Partial<GraphOptions>) => {
+export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "local") => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
     const localGraph = { ...defaultOptions.localGraph, ...userOpts?.localGraph };
     // 传给 inline 脚本用于拼预计算 JSON 路径
@@ -106,6 +106,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
         <div class="graph-outer">
           <div
             class="graph-container"
+            data-graph-view={view}
             data-basepath={basePath}
             data-cfg={JSON.stringify(localGraph)}
             data-precompute-depth={String(precomputeDepth)}

@@ -20,7 +20,7 @@ const SYSTEM_FOLDERS = ["_dimensions", "tags"]
  * 因此图谱展示的是「该文件夹内的文件 + 它们的关联节点」。
  */
 export default ((userOpts?: Partial<GraphOptions>) => {
-  const inner = Graph(userOpts)
+  const inner = Graph(userOpts, "folder")
   const FolderGraph: QuartzComponent = (props: QuartzComponentProps) => {
     const slug = (props.fileData.slug ?? "") as string
     // 与 folder-page 同一套匹配口径：目录页 slug 以 `/index` 结尾

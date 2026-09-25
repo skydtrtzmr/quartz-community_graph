@@ -37,7 +37,8 @@ import {
 } from "@quartz-community/utils"
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
-import { AggregationRule, commonFolderOf, matchCoreNodeFilter } from "../../util/aggregation"
+import { AggregationRule, commonFolderOf } from "../../util/aggregation"
+import { graphViewOf, selectCoreNodes } from "./views"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
@@ -593,6 +594,7 @@ function main() {
     // 确保 data 已定义（TypeScript 智能推断）
     const contentData = data!
     const isGlobalGraph = depth < 0
+    const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
 
     // ===== 前向声明：预计算路径和计算路径都会设置的变量 =====
     // 这些变量在展开/收起函数中被引用，必须提升到两个路径的公共作用域
@@ -1226,67 +1228,18 @@ function main() {
         (l) => nonOrphanNodeIds.has(l.source.id) && nonOrphanNodeIds.has(l.target.id),
       )
 
-      // 标记核心/边缘节点
-      if (isGlobalGraph && coreNodeFilter && coreNodeFilter.length > 0) {
-        // 规则匹配候选核心节点（全局图谱 + 配置了 coreNodeFilter）
-        console.log("[Graph] coreNodeFilter 规则:", JSON.stringify(coreNodeFilter))
-        let matchedCount = 0
-        const matchSamples: { id: string; folderKey: string; matched: boolean }[] = []
-        for (const n of nonOrphanNodes) {
-          const details = contentData.get(n.id)
-          n.isCore = matchCoreNodeFilter(n.id, details?.frontmatter, coreNodeFilter)
-          if (n.isCore) matchedCount++
-          // 手动计算 folderKey 用于调试
-          const parts = n.id.split("/")
-          const folderKey = parts.length > 1 ? parts[0] : "/"
-          if (matchSamples.length < 20) {
-            matchSamples.push({ id: n.id, folderKey, matched: n.isCore })
-          }
-        }
-        console.log(
-          `[Graph] coreNodeFilter 匹配结果: ${matchedCount}/${nonOrphanNodes.length} 个核心节点`,
-        )
-        console.log("[Graph] 匹配样例 (前20条):", matchSamples)
-        // 统计各 folderKey 出现次数
-        const folderStats = new Map<string, number>()
-        for (const n of nonOrphanNodes) {
-          const parts = n.id.split("/")
-          const key = parts.length > 1 ? parts[0] : "/"
-          folderStats.set(key, (folderStats.get(key) ?? 0) + 1)
-        }
-        console.log(
-          "[Graph] 一级文件夹分布:",
-          Object.fromEntries([...folderStats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)),
-        )
-      } else {
-        // 未配置 coreNodeFilter 或局部图谱：回退到连接数阈值（全局图谱 >2，局部图谱 >1）
-        const threshold = isGlobalGraph ? 2 : 1
-        for (const n of nonOrphanNodes) {
-          n.isCore = (nodeLinkCount.get(n.id) ?? 0) > threshold
-        }
-      }
-
-      if (sharedAggregation && !isGlobalGraph) {
-        for (const n of nonOrphanNodes) n.isCore = n.id === slug
-      }
-
-      // [SAFETY] 全局图谱硬上限：无论规则匹配还是回退，核心节点数不能超过上限
-      // 注意：配置了 regionRules 时首屏已按大区聚合，跳过全局硬上限以避免大区计数失真
-      if (
-        isGlobalGraph &&
-        coreNodeLimit &&
-        coreNodeLimit > 0 &&
-        !(regionRules && regionRules.length > 0)
-      ) {
-        const coreNodes = nonOrphanNodes.filter((n) => n.isCore)
-        if (coreNodes.length > coreNodeLimit) {
-          coreNodes.sort((a, b) => (nodeLinkCount.get(b.id) ?? 0) - (nodeLinkCount.get(a.id) ?? 0))
-          const selected = new Set(coreNodes.slice(0, coreNodeLimit).map((n) => n.id))
-          for (const n of nonOrphanNodes) {
-            if (!selected.has(n.id)) n.isCore = false
-          }
-        }
-      }
+      // 四种视角分别选择核心节点；此阶段保留原有分类规则与上限。
+      selectCoreNodes({
+        view: graphView,
+        nodes: nonOrphanNodes,
+        nodeLinkCount,
+        contentData,
+        slug,
+        sharedAggregation: !!sharedAggregation,
+        coreNodeFilter,
+        coreNodeLimit,
+        hasRegionRules: !!(regionRules && regionRules.length > 0),
+      })
 
       const edgeNodes = nonOrphanNodes.filter((n) => !n.isCore)
       const edgeNodeIds = new Set(edgeNodes.map((n) => n.id))
@@ -3844,6 +3797,7 @@ function main() {
           // 清除维度子图放大的残留标记（本函数渲染全局/侧栏图谱，均非维度子图）
           delete graphContainer.dataset.dimensionGraph
           delete graphContainer.dataset.localGraphUrl
+          graphContainer.dataset.graphView = local ? (document.querySelector<HTMLElement>(".graph .graph-container")?.dataset.graphView ?? "local") : "global"
           // 放大按钮复用当前页面的局部配置；快捷键仍可打开全局图谱。
           // 覆盖层容器现在挂在 header（不一定是局部图谱的兄弟节点），所以按全页查询局部图谱容器
           const localContainer = document.querySelector<HTMLElement>(".graph .graph-container")
