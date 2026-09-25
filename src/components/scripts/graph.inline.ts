@@ -81,9 +81,9 @@ interface LocalGraphData {
 const DIMENSION_GRAPH_DEFAULTS = {
   depth: 1,
   scale: 1.1,
-  repelForce: 0.6,
+  repelForce: 0.3,
   centerForce: 0.3,
-  linkDistance: 70,
+  linkDistance: 50,
   fontSize: 0.75,
   opacityScale: 1,
   showTags: false,
@@ -519,6 +519,7 @@ function main() {
             const filtered = filterDimensionGraph(localGraphData, {
               scope: params.get("scope") ?? "",
               context: params.get("context") ?? "",
+              filter: params.get("filter") ?? "",
             })
             // ⚠️ 必须浅拷贝：fetchCachedLocalGraph 返回的是 Promise 缓存里的**同一个对象**，
             // 原地裁剪会让第二次裁剪作用在已裁剪的数据上（切回 scope 后图谱越裁越空）
@@ -531,7 +532,7 @@ function main() {
             graph.dataset["dimensionNodeCount"] = String(Object.keys(filtered.nodes).length)
             graph.dataset["dimensionEdgeCount"] = String(filtered.edges.length)
             console.log(
-              `[Graph] 维度子图裁剪：scope=${params.get("scope") ?? "-"} context=${params.get("context") ?? "-"} -> ${Object.keys(filtered.nodes).length} 节点 / ${filtered.edges.length} 边`,
+              `[Graph] 维度子图裁剪：scope=${params.get("scope") ?? "-"} context=${params.get("context") ?? "-"} filter=${params.get("filter") ?? "-"} -> ${Object.keys(filtered.nodes).length} 节点 / ${filtered.edges.length} 边`,
             )
           }
           const nodeCount = Object.keys(localGraphData.nodes).length
@@ -646,6 +647,8 @@ function main() {
       scope: string
       /** 该聚合的分组键（folder 规则时即目录路径，用于跳转文件夹页） */
       groupKey?: string
+      /** 祖先字段值约束（未来多级字段聚合时填充；跳转维度值页时编码为 ?filter=） */
+      ancestorFilter?: Array<{ field: string; value: string }>
     }
 
     /** 从聚合节点 id 里取分组键（仅预计算产物的节点需要，其余构造点都有 groupKey） */
@@ -719,6 +722,15 @@ function main() {
       if (info.scope) params.set("scope", info.scope)
       const fromSlug = simplifySlug(getFullSlug(window))
       if (fromSlug) params.set("context", fromSlug)
+      // 祖先维度约束：与目录树二级节点入口一致的 `?filter=字段:值,...` 机制。
+      // 当前图谱聚合是「目录 + 单字段」，字段级节点没有字段级祖先 → ancestorFilter 为空；
+      // 未来图谱支持多级字段聚合时，此处自动带上祖先 filter，保持入口一致。
+      if (info.ancestorFilter && info.ancestorFilter.length > 0) {
+        params.set(
+          "filter",
+          info.ancestorFilter.map((entry) => `${entry.field}:${entry.value}`).join(","),
+        )
+      }
 
       const target = `${siteRoot()}/_dimensions/${encodePathSegments(fieldSlug)}/${encodePathSegments(valueSlug)}`
       const query = params.toString()
@@ -3328,7 +3340,6 @@ function main() {
             event.subject.fy = initPos.y + (event.y - initPos.y) / currentTransform.k
           })
           .on("end", function dragended(event) {
-            if (!event.active) simulation.alphaTarget(0)
             dragging = false
 
             if (isGlobalGraph) {
@@ -3342,6 +3353,14 @@ function main() {
               // 局部图谱立即释放
               event.subject.fx = null
               event.subject.fy = null
+            }
+
+            // [TUNING] 拖拽结束释放固定位置后短暂 re-heat：拖拽时 fx/fy 钉住 + forceManyBody 会把其它簇
+            // 越推越开；若不 re-heat，forceCenter/forceLink 没有足够 alpha 把布局拉回收紧 →
+            // 表现为「拖一次主节点，各簇间距就变大一圈」。re-heat 后延迟归零让整图回弹到紧致布局。
+            if (!event.active) {
+              simulation.alphaTarget(isGlobalGraph ? 0.1 : 0.3).restart()
+              setTimeout(() => simulation.alphaTarget(0), isGlobalGraph ? 300 : 500)
             }
 
             if (Date.now() - dragStartTime < 300) {
@@ -3754,6 +3773,14 @@ function main() {
       window.addCleanup(() => icon.removeEventListener("click", expandLocalGraph))
     })
 
+    // 维度值页「放大维度图谱」按钮 → 用维度子图数据打开全屏 overlay（复用全局图谱容器）
+    const dimensionExpandButtons = document.getElementsByClassName("dimension-expand")
+    Array.from(dimensionExpandButtons).forEach((btn) => {
+      const expandDimensionGraph = () => renderDimensionGraphExpanded()
+      btn.addEventListener("click", expandDimensionGraph)
+      window.addCleanup(() => btn.removeEventListener("click", expandDimensionGraph))
+    })
+
     document.addEventListener("keydown", shortcutHandler)
     window.addCleanup(() => {
       document.removeEventListener("keydown", shortcutHandler)
@@ -3805,6 +3832,9 @@ function main() {
         const graphContainer = container.querySelector(".global-graph-container") as HTMLElement
         registerEscapeHandler(container, hideGlobalGraph)
         if (graphContainer) {
+          // 清除维度子图放大的残留标记（本函数渲染全局/侧栏图谱，均非维度子图）
+          delete graphContainer.dataset.dimensionGraph
+          delete graphContainer.dataset.localGraphUrl
           // 放大按钮复用当前页面的局部配置；快捷键仍可打开全局图谱。
           // 覆盖层容器现在挂在 header（不一定是局部图谱的兄弟节点），所以按全页查询局部图谱容器
           const localContainer = document.querySelector<HTMLElement>(".graph .graph-container")
@@ -3837,6 +3867,39 @@ function main() {
               console.log(`[Graph] 全局渲染完成后发现世代已过期，立即执行 cleanup 避免泄漏`)
               cleanup()
             }
+          }
+        }
+      }
+    }
+
+    /** 维度值页「放大」：把维度子图渲染到全屏 overlay（复用全局图谱容器，数据源=维度子图产物） */
+    async function renderDimensionGraphExpanded() {
+      const dimContainer = document.querySelector<HTMLElement>("[data-dimension-graph]")
+      if (!dimContainer) return
+      const url = dimContainer.dataset["dimensionGraphUrl"] || dimContainer.dataset["localGraphUrl"]
+      if (!url) return
+      const thisGeneration = renderGeneration
+      const currentSlug = getFullSlug(window)
+      for (const container of globalContainers()) {
+        container.classList.add("active")
+        const graphContainer = container.querySelector(".global-graph-container") as HTMLElement
+        registerEscapeHandler(container, hideGlobalGraph)
+        if (!graphContainer) continue
+        // 数据源切换为维度子图：renderGraph 据此走「维度裁剪」路径（scope/context/filter 都从当前 URL 读）
+        graphContainer.dataset["dimensionGraph"] = "true"
+        graphContainer.dataset["localGraphUrl"] = url
+        graphContainer.dataset["sharedAggregation"] = "false"
+        const cfg = JSON.parse(dimContainer.dataset.cfg ?? "{}") as D3Config
+        graphContainer.dataset.cfg = JSON.stringify({
+          ...cfg,
+          fontSize: (cfg.fontSize ?? 0.6) * 1.25,
+        })
+        const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration)
+        if (cleanup) {
+          if (thisGeneration === renderGeneration) {
+            globalGraphCleanups.push(cleanup)
+          } else {
+            cleanup()
           }
         }
       }
