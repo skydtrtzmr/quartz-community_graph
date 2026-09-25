@@ -237,8 +237,13 @@ async function fetchCachedLocalGraph(
   basePath: string,
   overrideUrl?: string,
 ): Promise<any | null> {
+  // ⚠️ 产物（emitters/graphLocal.ts）是以 **simplifySlug 之后**的 slug 作为键落盘的：
+  // index 类页面 `项目/index` → `项目/`。这里必须先把 slug 归一化再算 hash / 拼路径，
+  // 否则文件夹页（以及其它 index 派生页）会 404 → 回退 BFS → 只渲染出「中心节点自己」。
+  const simpleSlug = simplifySlug(fullSlug as FullSlug) as unknown as string
+
   // 容器显式指定了产物地址（维度值页）时，以该地址为准并单独缓存
-  const cacheKey = overrideUrl ? `url:${overrideUrl}` : `${basePath}:${fullSlug}`
+  const cacheKey = overrideUrl ? `url:${overrideUrl}` : `${basePath}:${simpleSlug}`
 
   // 检查 Promise 缓存 - 命中则直接返回已有 Promise
   if (localGraphPromiseCache.has(cacheKey)) {
@@ -249,14 +254,14 @@ async function fetchCachedLocalGraph(
   // 创建新的 fetch Promise 并缓存
   // 注意：async IIFE 被调用时函数体立即执行，fetch 请求从这里开始
   const fetchPromise = (async () => {
-    const hash = getLocalGraphHash(fullSlug)
+    const hash = getLocalGraphHash(simpleSlug)
     const dir1 = hash.slice(0, 2)
     const dir2 = hash.slice(2, 4)
     const localGraphPath = overrideUrl
       ? encodePathSegments(joinArtifactUrl(basePath, overrideUrl))
       : basePath
-        ? `/${basePath}/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
-        : `/graph/local/${dir1}/${dir2}/${encodeURIComponent(fullSlug)}.json`
+        ? `/${basePath}/graph/local/${dir1}/${dir2}/${encodeURIComponent(simpleSlug)}.json`
+        : `/graph/local/${dir1}/${dir2}/${encodeURIComponent(simpleSlug)}.json`
 
     try {
       console.log("[LocalGraph Cache] Fetch:", localGraphPath)

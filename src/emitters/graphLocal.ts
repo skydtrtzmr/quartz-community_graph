@@ -82,6 +82,66 @@ function buildFolderTitles(linkIndex: Map<SimpleSlug, ContentDetails>): Record<s
   return folderTitles
 }
 
+/**
+ * 文件夹页 slug。
+ * ⚠️ 实测形式是 **`项目/`（带尾斜杠）**（`simplifySlug("项目/index")` 的结果），
+ * 同时兼容 `项目/index`、根 `index`、`/` 等写法。
+ */
+function isFolderIndexSlug(slug: SimpleSlug): boolean {
+  return (
+    slug === "/" ||
+    slug === "" ||
+    slug === "index" ||
+    slug.endsWith("/") ||
+    slug.endsWith("/index")
+  )
+}
+
+/** 该文件夹的直属子项（不含更深层级），最多 limit 个 */
+function directChildrenOf(
+  linkIndex: Map<SimpleSlug, ContentDetails>,
+  folderSlug: SimpleSlug,
+  limit: number,
+): SimpleSlug[] {
+  const folder =
+    folderSlug === "/" || folderSlug === "" || folderSlug === "index"
+      ? ""
+      : folderSlug.replace(/\/index$/, "").replace(/\/+$/, "")
+  const prefix = folder === "" ? "" : folder + "/"
+  const children: SimpleSlug[] = []
+  for (const slug of linkIndex.keys()) {
+    if (slug === folderSlug) continue
+    if (!slug.startsWith(prefix)) continue
+    const rest = slug.slice(prefix.length)
+    if (rest === "" || rest.includes("/")) continue
+    children.push(slug)
+    if (children.length >= limit) break
+  }
+  return children
+}
+
+/**
+ * 文件夹页（`xxx/index`）的 index.md 本身没有出链，局部图谱会只剩一个孤立节点。
+ * 这里把「该文件夹的直属子项」补成它的出链，让文件夹页的局部图谱显示
+ * 「该文件夹内的节点 + 它们的关联节点（depth=1 邻域）」。
+ *
+ * 只对文件夹页生效（其它页原样返回），上限 `limit` 防止超大目录把图谱撑爆。
+ */
+function withFolderChildren(
+  slug: SimpleSlug,
+  centerData: ContentDetails,
+  linkIndex: Map<SimpleSlug, ContentDetails>,
+  limit: number,
+): ContentDetails {
+  if (!isFolderIndexSlug(slug)) return centerData
+  const children = directChildrenOf(linkIndex, slug, limit)
+  if (children.length === 0) return centerData
+  const existing = new Set(centerData.links ?? [])
+  const extra = children.filter((child) => !existing.has(child))
+  if (extra.length === 0) return centerData
+  return { ...centerData, links: [...(centerData.links ?? []), ...extra] }
+}
+
 // Find frontmatter field containing the target link
 function getFrontmatterFieldForLink(
   frontmatter: Record<string, unknown> | undefined,
@@ -104,6 +164,9 @@ function getFrontmatterFieldForLink(
   }
   return undefined
 }
+
+/** 文件夹页局部图谱最多纳入的直属子项数（防止超大目录把图谱撑爆） */
+const FOLDER_CHILDREN_LIMIT = 60
 
 export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) => {
   const options: Options = { precomputeLocal: true, localDepth: 1, ...opts }
@@ -142,14 +205,18 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
       } else {
         centerData = createVirtualContentDetails(slug, isTag)
       }
+      // 文件夹页：用该文件夹的直属子项补出链（index.md 本身无链接 → 否则图谱只剩孤立节点）
+      centerData = withFolderChildren(slug, centerData, linkIndex, FOLDER_CHILDREN_LIMIT)
 
+      // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
+      const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
       const localGraph = calculateLocalGraph(
         slug,
         centerData,
         linkIndex,
         validLinks,
         virtualNodes,
-        depth,
+        effectiveDepth,
         folderTitles,
       )
 
@@ -374,14 +441,17 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         } else {
           centerData = createVirtualContentDetails(slug, allTags.has(slug))
         }
+        centerData = withFolderChildren(slug, centerData, linkIndex, FOLDER_CHILDREN_LIMIT)
 
+        // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
+        const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
         const localGraph = calculateLocalGraph(
           slug,
           centerData,
           linkIndex,
           validLinks,
           virtualNodes,
-          depth,
+          effectiveDepth,
           folderTitles,
         )
         const path = getLocalGraphPath(slug)
@@ -422,7 +492,9 @@ function calculateLocalGraph(
 
     if (currentDepth >= depth) continue
 
-    const currentData = linkIndex.get(current)
+    // 中心节点用传入的 centerData（文件夹页在这里补过「直属子项」出链）；
+    // 其余节点仍从 linkIndex 取。若这里直接用 linkIndex.get，会丢掉补出来的出链。
+    const currentData = current === centerSlug ? centerData : linkIndex.get(current)
     const currentIsVirtual = !currentData
 
     // Process outgoing links (only for real pages, not virtual nodes)

@@ -158,6 +158,11 @@
         "displayName": "Global Graph Overlay",
         "defaultPosition": "header",
         "defaultPriority": 30
+      },
+      "FolderGraph": {
+        "displayName": "Folder Graph",
+        "defaultPosition": "beforeBody",
+        "defaultPriority": 25
       }
     }
   },
