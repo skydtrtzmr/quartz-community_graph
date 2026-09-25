@@ -6,6 +6,8 @@ export type GraphView = "global" | "local" | "folder" | "dimension";
 export interface CoreCandidate {
   id: string;
   isCore?: boolean;
+  isAggregation?: boolean;
+  isRegion?: boolean;
 }
 
 export interface CoreSelection<N extends CoreCandidate> {
@@ -49,7 +51,14 @@ function selectLocal<N extends CoreCandidate>(selection: CoreSelection<N>) {
 }
 
 function selectFolder<N extends CoreCandidate>(selection: CoreSelection<N>) {
-  selectLocal(selection);
+  const directFiles = focusNodeIds(
+    "folder",
+    selection.nodes,
+    selection.slug,
+    [],
+    (id) => !!selection.contentData.get(id)?.filePath,
+  );
+  for (const node of selection.nodes) node.isCore = directFiles.has(node.id);
 }
 
 function selectDimension<N extends CoreCandidate>(selection: CoreSelection<N>) {
@@ -117,4 +126,39 @@ export function selectCoreNodes<N extends CoreCandidate>(selection: CoreSelectio
       selectDimension(selection);
       break;
   }
+}
+
+/** Focus is visual only: it must not change isCore, grouping, or expansion behavior. */
+export function focusNodeIds<N extends CoreCandidate>(
+  view: GraphView,
+  nodes: N[],
+  center: string,
+  matched: Array<{ slug: string }> = [],
+  isReal: (id: string) => boolean = () => true,
+): Set<string> {
+  const focus = new Set<string>();
+  const normalizedCenter = center.replace(/\/index$/, "").replace(/\/+$/, "");
+  const folderPrefix = normalizedCenter ? `${normalizedCenter}/` : "";
+  const matchedIds = new Set(matched.map((entry) => entry.slug));
+
+  for (const node of nodes) {
+    if (node.isAggregation || node.isRegion || !isReal(node.id)) continue;
+    if (view === "global" && node.isCore) focus.add(node.id);
+    if (
+      view === "local" &&
+      node.id.replace(/\/index$/, "").replace(/\/+$/, "") === normalizedCenter
+    ) {
+      focus.add(node.id);
+    }
+    if (view === "folder" && node.id.startsWith(folderPrefix)) {
+      const rest = node.id.slice(folderPrefix.length);
+      if (rest !== "" && rest !== "index" && !rest.includes("/")) focus.add(node.id);
+    }
+    if (view === "dimension" && matchedIds.has(node.id)) focus.add(node.id);
+  }
+  return focus;
+}
+
+export function isExpandableLocalGroup(node: { id: string; isRegion?: boolean }): boolean {
+  return node.isRegion === true || node.id.startsWith("agg:");
 }

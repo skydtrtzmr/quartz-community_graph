@@ -89,19 +89,14 @@ function buildFolderTitles(linkIndex: Map<SimpleSlug, ContentDetails>): Record<s
  */
 function isFolderIndexSlug(slug: SimpleSlug): boolean {
   return (
-    slug === "/" ||
-    slug === "" ||
-    slug === "index" ||
-    slug.endsWith("/") ||
-    slug.endsWith("/index")
+    slug === "/" || slug === "" || slug === "index" || slug.endsWith("/") || slug.endsWith("/index")
   )
 }
 
-/** 该文件夹的直属子项（不含更深层级），最多 limit 个 */
-function directChildrenOf(
+/** 该文件夹的全部直属内容文件（不含更深层级和目录 index）。 */
+export function directChildrenOf(
   linkIndex: Map<SimpleSlug, ContentDetails>,
   folderSlug: SimpleSlug,
-  limit: number,
 ): SimpleSlug[] {
   const folder =
     folderSlug === "/" || folderSlug === "" || folderSlug === "index"
@@ -113,9 +108,8 @@ function directChildrenOf(
     if (slug === folderSlug) continue
     if (!slug.startsWith(prefix)) continue
     const rest = slug.slice(prefix.length)
-    if (rest === "" || rest.includes("/")) continue
+    if (rest === "" || rest === "index" || rest.includes("/")) continue
     children.push(slug)
-    if (children.length >= limit) break
   }
   return children
 }
@@ -125,16 +119,15 @@ function directChildrenOf(
  * 这里把「该文件夹的直属子项」补成它的出链，让文件夹页的局部图谱显示
  * 「该文件夹内的节点 + 它们的关联节点（depth=1 邻域）」。
  *
- * 只对文件夹页生效（其它页原样返回），上限 `limit` 防止超大目录把图谱撑爆。
+ * 只对文件夹页生效（其它页原样返回），不截断直属文件集合。
  */
 function withFolderChildren(
   slug: SimpleSlug,
   centerData: ContentDetails,
   linkIndex: Map<SimpleSlug, ContentDetails>,
-  limit: number,
 ): ContentDetails {
   if (!isFolderIndexSlug(slug)) return centerData
-  const children = directChildrenOf(linkIndex, slug, limit)
+  const children = directChildrenOf(linkIndex, slug)
   if (children.length === 0) return centerData
   const existing = new Set(centerData.links ?? [])
   const extra = children.filter((child) => !existing.has(child))
@@ -164,9 +157,6 @@ function getFrontmatterFieldForLink(
   }
   return undefined
 }
-
-/** 文件夹页局部图谱最多纳入的直属子项数（防止超大目录把图谱撑爆） */
-const FOLDER_CHILDREN_LIMIT = 60
 
 export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) => {
   const options: Options = { precomputeLocal: true, localDepth: 1, ...opts }
@@ -206,7 +196,7 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         centerData = createVirtualContentDetails(slug, isTag)
       }
       // 文件夹页：用该文件夹的直属子项补出链（index.md 本身无链接 → 否则图谱只剩孤立节点）
-      centerData = withFolderChildren(slug, centerData, linkIndex, FOLDER_CHILDREN_LIMIT)
+      centerData = withFolderChildren(slug, centerData, linkIndex)
 
       // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
       const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
@@ -394,6 +384,14 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         }
       }
 
+      // 文件夹图谱把直属文件作为核心集合；成员增删或其关联变化时也要重算父目录。
+      for (const affected of [...affectedSlugs]) {
+        const slash = affected.lastIndexOf("/")
+        if (slash < 0) continue
+        const parent = affected.slice(0, slash + 1) as SimpleSlug
+        if (linkIndex.has(parent)) affectedSlugs.add(parent)
+      }
+
       // 删除已不存在的文件对应的 local graph
       for (const slug of affectedSlugs) {
         if (validLinks.has(slug)) continue
@@ -441,7 +439,7 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         } else {
           centerData = createVirtualContentDetails(slug, allTags.has(slug))
         }
-        centerData = withFolderChildren(slug, centerData, linkIndex, FOLDER_CHILDREN_LIMIT)
+        centerData = withFolderChildren(slug, centerData, linkIndex)
 
         // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
         const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth

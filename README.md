@@ -31,6 +31,17 @@ minGroupSize，所有类别统一显示聚合节点（含单成员类别）；�
 是否显示文件与原中心的真实连线。设为 false 时仍保留聚合父子连线及其他关系；
 多级展开中的“原中心”一直指最初的页面/核心节点，而非中间聚合节点。
 
+## 文件夹页图谱布局
+
+`FolderGraph` 的分区复用 `globalGraph` 的 `repelForce`、`centerForce`、
+`linkDistance`、`enableRadial`，以及全局图谱的速度衰减、冷却和拖拽重启参数。
+`depth` 和聚合关系仍来自文件夹页的局部 JSON 与共享聚合规则。
+径向力的目标半径随画布尺寸计算，并在展开、收起全过程持续启用；不固定分区坐标。
+普通内容页的 `localGraph` 参数独立生效。
+
+力计算集中在 `components/scripts/graphSimulation.ts`；数值回归使用实际碰撞与 D3 力，
+覆盖首屏、连续 8 次展开/收起以及同一画布下文件夹/全局布局的一致性。
+
 ## Features
 
 - 🕸️ **Interactive Network Graph** - Visualize connections between your pages

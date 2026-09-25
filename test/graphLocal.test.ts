@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SimpleSlug } from "@quartz-community/types"
-import { djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
+import { directChildrenOf, djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
 
 /**
  * 运行时读取端（graph3.inline.ts）使用的算法副本。
@@ -52,5 +52,16 @@ describe("graphLocal 路径协议", () => {
     for (const slug of slugs) {
       expect(getLocalGraphPath(slug as SimpleSlug)).toBe(runtimeLocalGraphPath(slug))
     }
+  })
+})
+
+describe("folder graph membership", () => {
+  it("includes every direct file without the old 60-file cap", () => {
+    const index = new Map<SimpleSlug, never>()
+    index.set("项目/" as SimpleSlug, {} as never)
+    for (let i = 0; i < 75; i++) index.set(`项目/p${i}` as SimpleSlug, {} as never)
+    index.set("项目/子目录/p" as SimpleSlug, {} as never)
+    index.set("人员/p" as SimpleSlug, {} as never)
+    expect(directChildrenOf(index, "项目/" as SimpleSlug)).toHaveLength(75)
   })
 })

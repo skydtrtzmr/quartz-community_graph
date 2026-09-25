@@ -13,11 +13,7 @@ import {
   SimulationNodeDatum,
   SimulationLinkDatum,
   Simulation,
-  forceSimulation,
-  forceManyBody,
-  forceCenter,
   forceLink,
-  forceRadial,
   zoomIdentity,
   select,
   drag,
@@ -38,7 +34,8 @@ import {
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, commonFolderOf } from "../../util/aggregation"
-import { graphViewOf, selectCoreNodes } from "./views"
+import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
+import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
@@ -314,6 +311,8 @@ function main() {
     text: string
     tags: string[]
     isCore?: boolean
+    /** 当前视角的主节点；只影响视觉标记，不参与聚合和力布局。 */
+    isFocus?: boolean
     isExpanded?: boolean
     edgeNodeCount?: number
     isAggregation?: boolean
@@ -533,6 +532,7 @@ function main() {
               ...localGraphData,
               nodes: filtered.nodes as typeof localGraphData.nodes,
               edges: filtered.edges as typeof localGraphData.edges,
+              matched: filtered.matched,
             }
             // 调试用：把裁剪后的规模写到容器上，便于排查「参数是否真的生效」
             graph.dataset["dimensionNodeCount"] = String(Object.keys(filtered.nodes).length)
@@ -1214,6 +1214,11 @@ function main() {
           sourceField: l.sourceField,
         }))
 
+      // 构建产物里的目录→文件边只用于发现直属文件，不是真实内容关系。
+      if (graphView === "folder") {
+        allLinks = allLinks.filter((link) => link.source.id !== slug && link.target.id !== slug)
+      }
+
       // 连接数统计
       nodeLinkCount = new Map<string, number>()
       for (const l of allLinks) {
@@ -1222,13 +1227,18 @@ function main() {
       }
 
       // 过滤孤儿节点
-      const nonOrphanNodes = allNodes.filter((n) => (nodeLinkCount.get(n.id) ?? 0) > 0)
+      const folderCoreIds = graphView === "folder"
+        ? focusNodeIds("folder", allNodes, slug, [], (id) => !!contentData.get(id as SimpleSlug)?.filePath)
+        : new Set<string>()
+      const nonOrphanNodes = allNodes.filter(
+        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id),
+      )
       const nonOrphanNodeIds = new Set(nonOrphanNodes.map((n) => n.id))
       const nonOrphanLinks = allLinks.filter(
         (l) => nonOrphanNodeIds.has(l.source.id) && nonOrphanNodeIds.has(l.target.id),
       )
 
-      // 四种视角分别选择核心节点；此阶段保留原有分类规则与上限。
+      // 文件夹视角的直属文件是核心集合；其余视角保留各自规则。
       selectCoreNodes({
         view: graphView,
         nodes: nonOrphanNodes,
@@ -1298,7 +1308,7 @@ function main() {
 
       const rules = aggregation ?? []
 
-      if (sharedAggregation) {
+      if (sharedAggregation && graphView !== "folder") {
         // A local view has one explicit center, irrespective of neighbors' link counts.
         const centers = nonOrphanNodes.filter(n => isGlobalGraph ? n.isCore : n.id === slug)
         for (const center of centers) {
@@ -1314,7 +1324,7 @@ function main() {
           ])
         }
         for (const info of aggNodeInfoMap.values()) nonOrphanNodes.push(info.node)
-      } else if (rules.length > 0) {
+      } else if (rules.length > 0 && graphView !== "folder") {
         // 逐个核心节点，对其单链接叶节点按规则顺序聚合
         for (const [coreId, coreEdgeNodes] of nodeToEdgeNodes.entries()) {
           let leavesForNextRule = coreEdgeNodes.filter((n) => singleLinkEdgeNodeIds.has(n.id))
@@ -1520,6 +1530,38 @@ function main() {
         }
       >()
       coreToRegionMap = new Map<SimpleSlug, SimpleSlug>()
+      let folderFirstScreenNodes: NodeData[] | null = null
+
+      if (graphView === "folder") {
+        const folderCores = nonOrphanNodes.filter((n) => n.isCore && !n.isAggregation)
+        const firstLevel = sharedAggregation
+          ? groupShared(folderCores, sharedAggregation, describeAggregationNode)
+          : { groups: [], leaves: folderCores }
+        folderFirstScreenNodes = [...firstLevel.leaves]
+        for (const group of firstLevel.groups) {
+          const regionId = `region:folder:${JSON.stringify([slug, group.rule, group.key])}` as SimpleSlug
+          const regionNode: NodeData = {
+            id: regionId,
+            text: group.rule.type === "field"
+              ? `${group.rule.field}: ${group.key}`
+              : `📁 ${folderDisplay(group.key)}`,
+            tags: [],
+            isCore: true,
+            isRegion: true,
+            regionChildIds: group.members.map((member) => member.id),
+            edgeNodeCount: group.members.length,
+            aggCollapsedRadius: Math.min(40, Math.max(25, 5 + Math.sqrt(group.members.length) * 3)),
+          }
+          regionNodeInfoMap.set(regionId, {
+            node: regionNode,
+            childCores: group.members,
+            remainingRules: group.remainingRules,
+            currentField: group.rule.type === "folder" ? "📁" : group.rule.field,
+          })
+          for (const member of group.members) coreToRegionMap.set(member.id, regionId)
+          folderFirstScreenNodes.push(regionNode)
+        }
+      }
 
       if (isGlobalGraph && regionRules && regionRules.length > 0) {
         const coreNodes = nonOrphanNodes.filter((n) => n.isCore && !n.isAggregation && !n.isRegion)
@@ -1589,7 +1631,17 @@ function main() {
       const initialNodes = filterOrphans ? nonOrphanNodes : allNodes
       const initialLinks = filterOrphans ? nonOrphanLinks : allLinks
 
-      if (isGlobalGraph && startCollapsed) {
+      if (graphView === "folder") {
+        // 一级分区替代目录中心；未分组的直属文件保留，关联节点待展开时出现。
+        const visibleNodes = folderFirstScreenNodes ?? []
+        const visibleIds = new Set(visibleNodes.map((node) => node.id))
+        graphData = {
+          nodes: visibleNodes,
+          links: nonOrphanLinks.filter(
+            (link) => visibleIds.has(link.source.id) && visibleIds.has(link.target.id),
+          ),
+        }
+      } else if (isGlobalGraph && startCollapsed) {
         if (regionRules && regionRules.length > 0) {
           // [REGION] 大区模式首屏：大区节点 + 跨区叶节点
           // 若 filterNonCoreNodes 为 true 且配置了 coreNodeFilter，则额外过滤掉不符合核心节点条件的非核心节点
@@ -1697,6 +1749,16 @@ function main() {
       }
     } // end else (!globalPrecomputed)
 
+    const focusIds = focusNodeIds(
+      graphView,
+      allNodes,
+      slug,
+      localGraphData?.matched ?? [],
+      (id) => graphView === "global" || !!contentData.get(id as SimpleSlug)?.filePath,
+    )
+    for (const node of allNodes) node.isFocus = focusIds.has(node.id)
+    graph.dataset["focusNodeCount"] = String(focusIds.size)
+
     const tweens = new Map<string, TweenNode>()
 
     // 追踪展开的聚合节点与其子节点的映射，用于碰撞检测时跳过父子碰撞
@@ -1724,53 +1786,6 @@ function main() {
       return baseRadius + Math.sqrt(linkCount)
     }
 
-    // 自定义碰撞力：展开的聚合节点与其子节点之间不进行碰撞检测
-    // 注意：D3 力应修改 vx/vy 而非直接修改 x/y，由 simulation 统一应用速度衰减
-    function createAggAwareCollide() {
-      let nodes: NodeData[] = []
-
-      function force(_alpha: number) {
-        // 拖拽中跳过碰撞计算，避免残差速度导致抖动
-        if (dragging) return
-        for (let k = 0; k < 3; k++) {
-          for (let i = 0; i < nodes.length; i++) {
-            const ni = nodes[i]
-            if (ni.x == null || ni.y == null) continue
-            const ri = nodeRadius(ni) + 8
-
-            for (let j = i + 1; j < nodes.length; j++) {
-              const nj = nodes[j]
-              if (nj.x == null || nj.y == null) continue
-
-              // 跳过展开的聚合节点与其子节点之间的碰撞
-              if (ni.aggExpandedRadius && expandedAggChildren.get(ni.id)?.has(nj.id)) continue
-              if (nj.aggExpandedRadius && expandedAggChildren.get(nj.id)?.has(ni.id)) continue
-
-              const rj = nodeRadius(nj) + 12
-              let dx = ni.x - nj.x
-              let dy = ni.y - nj.y
-              let dist = Math.sqrt(dx * dx + dy * dy) || 1
-              const minDist = ri + rj
-
-              if (dist < minDist) {
-                const push = ((minDist - dist) / dist) * 0.8
-                ni.vx = (ni.vx ?? 0) + dx * push
-                ni.vy = (ni.vy ?? 0) + dy * push
-                nj.vx = (nj.vx ?? 0) - dx * push
-                nj.vy = (nj.vy ?? 0) - dy * push
-              }
-            }
-          }
-        }
-      }
-
-      force.initialize = (n: NodeData[]) => {
-        nodes = n
-      }
-
-      return force
-    }
-
     const width = graph.offsetWidth
     const height = Math.max(graph.offsetHeight, 250)
 
@@ -1778,31 +1793,13 @@ function main() {
     if (!checkGeneration(generation)) return () => {}
 
     console.log("[DEBUG] 开始初始化 D3 simulation")
-    const simulation: Simulation<NodeData, LinkData> = forceSimulation<NodeData>(graphData.nodes)
-      .force("charge", forceManyBody().strength(-100 * repelForce))
-      .force("center", forceCenter().strength(centerForce))
-      .force("link", forceLink(graphData.links).distance(linkDistance))
-      // [TUNING] collide 增加额外缓冲，长标题节点不易重叠
-      .force("collide", createAggAwareCollide())
-
-    const radius = (Math.min(width, height) / 2) * 0.8
-    // [TUNING] 全局图谱 radial 强度降低，避免节点被强行推向外围圆周
-    if (enableRadial) simulation.force("radial", forceRadial(radius).strength(0.05))
-
-    // 局部图谱使用快速收敛参数
-    if (!isGlobalGraph) {
-      simulation.alphaMin(0.002).alphaDecay(0.05)
-      console.log(
-        `[DEBUG] 局部图谱：使用快速收敛参数 (alphaMin: ${simulation.alphaMin()}, alphaDecay: ${simulation.alphaDecay()})`,
-      )
-    } else {
-      // [TUNING] 全局图谱增加速度衰减，减少运动惯性，让布局更平滑稳定
-      // 0.75：比 v4 的 0.6 更"粘"，抑制拖拽/展开后的余震
-      simulation.velocityDecay(0.75)
-      console.log(
-        `[DEBUG] 全局图谱：使用调优收敛参数 (alphaMin: ${simulation.alphaMin()}, alphaDecay: ${simulation.alphaDecay()}, velocityDecay: ${simulation.velocityDecay()})`,
-      )
-    }
+    const dynamics = simulationSettings(graphView)
+    const simulation: Simulation<NodeData, LinkData> = createGraphSimulation(
+      graphData.nodes, graphData.links, graphView,
+      { repelForce, centerForce, linkDistance, enableRadial }, width, height,
+      createAggAwareCollide(nodeRadius, expandedAggChildren, () => dragging, graphView === "folder"),
+    )
+    console.log(`[Graph] ${graphView} layout: radial=${enableRadial}, velocityDecay=${simulation.velocityDecay()}`)
 
     simulation.on("end", () => {
       console.log("[DEBUG] D3 simulation 布局计算完成（已收敛）")
@@ -2252,6 +2249,14 @@ function main() {
         gfx.circle(0, 0, r).fill({ color: isTagNode ? computedStyleMap["--light"] : color(n) })
         if (isTagNode) gfx.stroke({ width: 2, color: computedStyleMap["--tertiary"] })
       }
+      // 当前视角的真实主节点：加外环，不改变 isCore 及节点半径/布局。
+      if (n.isFocus && !isTagNode) {
+        gfx.circle(0, 0, r + 3).stroke({
+          width: 2.5,
+          color: computedStyleMap["--secondary"],
+          alpha: 0.95,
+        })
+      }
 
       let oldLabelOpacity = 0
       gfx.on("pointerover", (e) => {
@@ -2473,7 +2478,19 @@ function main() {
         const regionInfo = regionNodeInfoMap.get(nodeId)
         const remainingRules = regionInfo?.remainingRules ?? []
 
-        if (remainingRules.length > 0 && childCores.length > 0) {
+        if (graphView === "folder" && sharedAggregation) {
+          // 文件夹一级分区沿用 v4 的 region 展开形态，后续级别仍用共享规则分组。
+          const regionNode = graphData.nodes.find((node) => node.id === nodeId)!
+          const children = createSharedGroups(regionNode, childCores, remainingRules)
+          const visible = new Set([...graphData.nodes, ...children].map((node) => node.id))
+          for (const child of children) {
+            if (!graphData.nodes.some((node) => node.id === child.id)) nodesToAdd.push(child)
+            linksToAdd.push({ source: regionNode, target: child })
+          }
+          linksToAdd.push(...allLinks.filter(
+            (link) => visible.has(link.source.id) && visible.has(link.target.id),
+          ))
+        } else if (remainingRules.length > 0 && childCores.length > 0) {
           // [REGION] 有多层规则：按 remainingRules 创建子聚合节点
           const coresForNextRule = childCores.filter(
             (n) => !graphData.nodes.some((gn) => gn.id === n.id),
@@ -2642,6 +2659,7 @@ function main() {
           }
         }
 
+        expandedNodeIds.add(nodeId)
         if (nodesToAdd.length > 0 || linksToAdd.length > 0) {
           graphData.nodes.push(...nodesToAdd)
           graphData.links.push(...linksToAdd)
@@ -2672,7 +2690,6 @@ function main() {
           simulation.alpha(0.3).restart()
         }
 
-        expandedNodeIds.add(nodeId)
         return
       }
 
@@ -3004,8 +3021,11 @@ function main() {
             }
             // 再处理聚合节点自身的展开状态
             if (expandedNodeIds.has(aggId)) {
-              expandedNodeIds.delete(aggId)
-              expandedAggChildren.delete(aggId)
+              if (graphView === "folder") collapseNode(aggId)
+              else {
+                expandedNodeIds.delete(aggId)
+                expandedAggChildren.delete(aggId)
+              }
             }
             idsToRemove.add(aggId)
           }
@@ -3280,10 +3300,9 @@ function main() {
           .container(() => app.canvas)
           .subject(() => graphData.nodes.find((n) => n.id === hoveredNodeId))
           .on("start", function dragstarted(event) {
-            // 局部图谱保持适度活跃（0.3：原值 1 会让整图持续剧烈抖动），
-            // 全局图谱温和加热避免大范围抖动
+            // 文件夹分区与全局大区复用同一交互加热参数。
             if (!event.active) {
-              simulation.alphaTarget(isGlobalGraph ? 0.1 : 0.3).restart()
+              simulation.alphaTarget(dynamics.dragAlpha).restart()
             }
             event.subject.fx = event.subject.x
             event.subject.fy = event.subject.y
@@ -3304,25 +3323,24 @@ function main() {
           .on("end", function dragended(event) {
             dragging = false
 
-            if (isGlobalGraph) {
-              // [TUNING] 全局图谱延迟释放固定位置，避免立即 fx=null 被拽走
+            if (dynamics.dragReleaseMs > 0) {
+              // 总览图短暂延迟释放拖拽位置，让新加入的节点先开始排布。
               setTimeout(() => {
                 if (expansionPins.has(event.subject.id)) return
                 event.subject.fx = null
                 event.subject.fy = null
-              }, 300)
+              }, dynamics.dragReleaseMs)
             } else if (!expansionPins.has(event.subject.id)) {
               // 局部图谱立即释放
               event.subject.fx = null
               event.subject.fy = null
             }
 
-            // [TUNING] 拖拽结束释放固定位置后短暂 re-heat：拖拽时 fx/fy 钉住 + forceManyBody 会把其它簇
-            // 越推越开；若不 re-heat，forceCenter/forceLink 没有足够 alpha 把布局拉回收紧 →
-            // 表现为「拖一次主节点，各簇间距就变大一圈」。re-heat 后延迟归零让整图回弹到紧致布局。
+            // 短暂加热后归零，径向力/连线力与斥力重新平衡。
+            // forceCenter 仅平移质心，本身不负责收拢无连线的分区。
             if (!event.active) {
-              simulation.alphaTarget(isGlobalGraph ? 0.1 : 0.3).restart()
-              setTimeout(() => simulation.alphaTarget(0), isGlobalGraph ? 300 : 500)
+              simulation.alphaTarget(dynamics.dragAlpha).restart()
+              setTimeout(() => simulation.alphaTarget(0), dynamics.reheatMs)
             }
 
             if (Date.now() - dragStartTime < 300) {
@@ -3340,11 +3358,11 @@ function main() {
                 }
               } else {
                 // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转（与全局图谱同款去抖）
-                if (nodeId.startsWith("agg:")) {
+                if (isExpandableLocalGroup(event.subject)) {
                   if (lastClickedNodeId === nodeId && now - lastClickTime < DOUBLE_CLICK_DELAY) {
                     lastClickedNodeId = null
                     lastClickTime = 0
-                    navigateToNode(nodeId, fullSlug)
+                    if (!event.subject.isRegion) navigateToNode(nodeId, fullSlug)
                   } else {
                     lastClickedNodeId = nodeId
                     lastClickTime = now
@@ -3375,11 +3393,11 @@ function main() {
             }
           } else {
             // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转
-            if (nodeId.startsWith("agg:")) {
+            if (isExpandableLocalGroup(node.simulationData)) {
               if (clickTimeout) {
                 clearTimeout(clickTimeout)
                 clickTimeout = null
-                navigateToNode(nodeId, fullSlug)
+                if (!node.simulationData.isRegion) navigateToNode(nodeId, fullSlug)
               } else {
                 clickTimeout = setTimeout(() => {
                   clickTimeout = null
