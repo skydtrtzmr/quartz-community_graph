@@ -31,6 +31,7 @@ import { readFile } from "node:fs/promises"
 import { globalCoreRules, groupGlobalNeighbors, readSharedAggregation } from "../util/sharedAggregation"
 import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
 import {
+  UNCLASSIFIED_KEY,
   extractGroupKey,
   isRuleEffective,
   matchCoreNodeFilter,
@@ -423,7 +424,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
             if (details) {
               groupKey = extractGroupKey({ slug: leafId, frontmatter: details.frontmatter }, rule)
             }
-            if (rule.type !== "folder" && groupKey === null) groupKey = "(无)"
+            if (rule.type !== "folder" && groupKey === null) groupKey = UNCLASSIFIED_KEY
             if (groupKey !== null) {
               const group = groupMap.get(groupKey) ?? []
               group.push(leafId)
@@ -544,7 +545,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
         if (details) {
           groupKey = extractGroupKey({ slug: coreId, frontmatter: details.frontmatter }, rule)
         }
-        if (!groupKey) groupKey = "(未分组)"
+        if (!groupKey) groupKey = UNCLASSIFIED_KEY
         const group = groupMap.get(groupKey) ?? []
         group.push(coreId)
         groupMap.set(groupKey, group)

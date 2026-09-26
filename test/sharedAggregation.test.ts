@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { groupShared, readSharedAggregation } from "../src/util/sharedAggregation";
+import { UNCLASSIFIED_KEY } from "../src/util/aggregation";
 import type { AggregationItem, SharedAggregation } from "../src/util/sharedAggregation";
 
 const artifact: SharedAggregation = {
@@ -58,7 +59,7 @@ describe("shared local aggregation", () => {
     expect(groupShared(items, { ...artifact, minGroupSize: 3 }, identity).groups).toEqual([]);
   });
 
-  it("takes first effective array value and puts partial missing values in 未设置", () => {
+  it("takes first effective array value and puts partial missing values in 未分类", () => {
     const result = groupShared(
       [
         note("任务/a", { status: [null, "", "完成", "待办"] }),
@@ -71,7 +72,7 @@ describe("shared local aggregation", () => {
     );
     expect(result.groups.map((g) => [g.key, g.members.length])).toEqual([
       ["完成", 2],
-      ["未设置", 2],
+      ["未分类", 2],
     ]);
   });
 
@@ -125,5 +126,9 @@ describe("shared local aggregation", () => {
     ]) {
       expect(() => readSharedAggregation(bad)).toThrow("Invalid aggregation.json");
     }
+  });
+
+  it("未分类跨插件契约：字面量固定为「未分类」", () => {
+    expect(UNCLASSIFIED_KEY).toBe("未分类");
   });
 });

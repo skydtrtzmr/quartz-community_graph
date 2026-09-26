@@ -33,7 +33,7 @@ import {
 } from "@quartz-community/utils"
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
-import { AggregationRule, commonFolderOf } from "../../util/aggregation"
+import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
 import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
 import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
@@ -1378,7 +1378,7 @@ function main() {
               }
 
               if (rule.type !== "folder" && !groupKey) {
-                groupKey = "(无)"
+                groupKey = UNCLASSIFIED_KEY
               }
               if (groupKey !== null) {
                 const group = groupMap.get(groupKey) ?? []
@@ -1595,7 +1595,7 @@ function main() {
             }
           }
 
-          if (!groupKey) groupKey = "(未分组)"
+          if (!groupKey) groupKey = UNCLASSIFIED_KEY
           const group = groupMap.get(groupKey) ?? []
           group.push(core)
           groupMap.set(groupKey, group)
@@ -2544,7 +2544,7 @@ function main() {
                 }
 
                 if (rule.type !== "folder" && !groupKey) {
-                  groupKey = "(无)"
+                  groupKey = UNCLASSIFIED_KEY
                 }
                 if (groupKey !== null) {
                   const group = groupMap.get(groupKey) ?? []
@@ -2776,7 +2776,7 @@ function main() {
                 }
 
                 if (rule.type !== "folder" && !groupKey) {
-                  groupKey = "(无)"
+                  groupKey = UNCLASSIFIED_KEY
                 }
                 if (groupKey !== null) {
                   const group = groupMap.get(groupKey) ?? []

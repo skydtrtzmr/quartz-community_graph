@@ -1,4 +1,4 @@
-import { isFolderIndexSlug, type AggregationRule } from "./aggregation";
+import { UNCLASSIFIED_KEY, isFolderIndexSlug, type AggregationRule } from "./aggregation";
 
 /** Consumer view of aggregation.json v1. Inheritance is resolved by aggregation-pro. */
 export interface SharedAggregation {
@@ -163,10 +163,10 @@ export function groupShared<T>(
     const buckets = new Map<string, T[]>();
     eligible.forEach((item, index) => {
       const key = keys[index];
-      // folder 规则下 null = 文件夹索引页（不是成员，直接跳过，不落「未设置」）；
-      // field 规则下 null = 字段缺值，仍归入「未设置」
+      // folder 规则下 null = 文件夹索引页（不是成员，直接跳过，不落「未分类」）；
+      // field 规则下 null = 字段缺值，归入「未分类」
       if (key === null && rule.type === "folder") return;
-      const bucketKey = key ?? "未设置";
+      const bucketKey = key ?? UNCLASSIFIED_KEY;
       const members = buckets.get(bucketKey) ?? [];
       members.push(item);
       buckets.set(bucketKey, members);

@@ -43,6 +43,16 @@ export interface CoreNodeFilterRule {
 export type CoreNodeFilterConfig = CoreNodeFilterRule[]
 
 /**
+ * frontmatter 字段缺值（缺失 / 空串 / 空数组）时的分组键与取值名。
+ *
+ * ⚠️ 跨插件字符串契约：本插件的「图谱聚合节点 / 大区节点」，与 aggregation-page-pro 的
+ * 维度取值（manifest）、explorer-pro 的目录树取值，三处必须**逐字符一致**——否则图谱双击
+ * 「未分类」聚合节点时在 manifest 里查不到该取值，拼出的 URL 也会指向不存在的页面。
+ * 插件之间不能共享包，故各自定义常量，并以单测断言字面量。
+ */
+export const UNCLASSIFIED_KEY = "未分类"
+
+/**
  * 文件夹索引页（`Index.md` / 目录页）判定。
  *
  * 这类 slug 代表「文件夹自身」而不是文件夹里的内容实体，可能的形式：
@@ -187,7 +197,7 @@ export function applyAggregationRule<
   const groups = new Map<string, T[]>()
 
   for (const item of items) {
-    const key = extractGroupKey(item, rule) ?? "(无)"
+    const key = extractGroupKey(item, rule) ?? UNCLASSIFIED_KEY
     const group = groups.get(key) ?? []
     group.push(item)
     groups.set(key, group)
