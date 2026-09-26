@@ -8,6 +8,7 @@ import { i18n } from "../i18n";
 import { getBasePath } from "../util/basePath";
 import style from "./styles/graph.scss";
 import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation";
+import { resolveGraphGrouping } from "../util/graphGrouping";
 
 export interface D3Config {
   drag: boolean;
@@ -54,14 +55,23 @@ export interface D3Config {
   colorBy?: string;
 }
 
+/**
+ * 用户可配的图谱参数：**不含**内部分组字段
+ * （`aggregation` / `regionRules` / `coreNodeFilter` 由 `resolveGraphGrouping` 从 `folders` 合成）。
+ */
+export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter"> & {
+  /** 主体文件夹白名单（全局图谱首屏大区；空 / 缺省 = 全部文件夹） */
+  folders?: string[];
+};
+
 export interface GraphOptions {
   /** 构建期预计算开关（由 emitter 消费；localDepth 同时决定运行时的 usePrecomputed 判定） */
   graph?: {
     precomputeLocal?: boolean;
     localDepth?: number;
   };
-  localGraph?: Partial<D3Config>;
-  globalGraph?: Partial<D3Config>;
+  localGraph?: Partial<GraphUserConfig>;
+  globalGraph?: Partial<GraphUserConfig>;
 }
 
 const defaultOptions: GraphOptions = {
@@ -93,7 +103,16 @@ const defaultOptions: GraphOptions = {
 
 export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "local") => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
-    const localGraph = { ...defaultOptions.localGraph, ...userOpts?.localGraph };
+    // 内部分组值由「主体文件夹白名单 + 站点聚合上下文」合成；
+    // 邻居的字段分组在有 configuration.aggregation 时由 sharedAggregation 接管，这里只兜底「按文件夹」。
+    const siteRootDepth = (cfg as unknown as { aggregation?: { root?: { depth?: number } } })
+      .aggregation?.root?.depth;
+    const grouping = resolveGraphGrouping({ folderDepth: siteRootDepth });
+    const localGraph = {
+      ...defaultOptions.localGraph,
+      aggregation: grouping.aggregation,
+      ...userOpts?.localGraph,
+    };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed = depth > 0 && depth <= precomputeDepth，

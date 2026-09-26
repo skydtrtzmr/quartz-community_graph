@@ -36,6 +36,7 @@ import {
   matchCoreNodeFilter,
 } from "../util/aggregation"
 import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation"
+import { resolveGraphGrouping } from "../util/graphGrouping"
 
 // ===== 预计算 JSON 结构定义 =====
 
@@ -100,12 +101,11 @@ interface GlobalGraphPrecomputed {
 
 interface Options {
   enabled?: boolean
-  /** 边缘节点聚合规则（YAML: options.globalGraph.aggregation） */
-  aggregation?: AggregationRule[]
-  /** 大区聚合规则（YAML: options.globalGraph.regionRules） */
-  regionRules?: AggregationRule[]
-  /** 核心节点过滤规则 */
-  coreNodeFilter?: CoreNodeFilterConfig
+  /**
+   * 主体文件夹白名单（YAML: `options.globalGraph.folders`）；空 / 缺省 = 全部文件夹。
+   * 大区 / 邻居分组 / 核心节点均由 `resolveGraphGrouping` 从它 + `configuration.aggregation` 合成。
+   */
+  folders?: string[]
   /** 核心节点数量硬上限 */
   coreNodeLimit?: number
   /** 全局图谱是否默认收起 */
@@ -165,9 +165,11 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     const shared = (ctx.cfg.configuration as unknown as { aggregation?: unknown }).aggregation === undefined
       ? null
       : readSharedAggregation(JSON.parse(await readFile(joinSegments(ctx.argv.output, "static", "aggregation.json"), "utf8")))
-    const aggregation: AggregationRule[] = opts.aggregation ?? []
-    const regionRules: AggregationRule[] = opts.regionRules ?? []
-    const coreNodeFilter: CoreNodeFilterConfig = opts.coreNodeFilter ?? []
+    // 三个内部分组值不再来自配置：由「主体文件夹白名单 + 站点聚合上下文」合成（见 util/graphGrouping.ts）
+    const { aggregation, regionRules, coreNodeFilter } = resolveGraphGrouping({
+      folders: opts.folders,
+      folderDepth: shared?.root?.depth,
+    })
     const coreNodeLimit = opts.coreNodeLimit ?? 100
     const startCollapsed = opts.startCollapsed ?? true
     const filterOrphans = opts.filterOrphans ?? true

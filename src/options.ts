@@ -1,5 +1,3 @@
-import type { AggregationRule, CoreNodeFilterConfig } from "./util/aggregation"
-
 /**
  * graph-pro 的 YAML 配置结构。
  *
@@ -23,8 +21,6 @@ export interface GraphProOptions {
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */
   localGraph?: {
     showAggregatedNodeLinks?: boolean
-    /** 边缘叶子节点聚合规则（运行时按目录/字段分组为聚合节点，带数字徽标） */
-    aggregation?: AggregationRule[]
     /** 其余为组件侧 D3Config 参数（drag/zoom/depth/...） */
     [key: string]: unknown
   }
@@ -34,13 +30,12 @@ export interface GraphProOptions {
     showAggregatedNodeLinks?: boolean
     /** 是否生成 graph/global/graphGlobal.json（默认 true） */
     enabled?: boolean
-    /** 边缘节点聚合规则 */
-    aggregation?: AggregationRule[]
-    /** 大区聚合规则（不配置则走"普通收起模式"） */
-    regionRules?: AggregationRule[]
-    /** 核心节点过滤规则 */
-    coreNodeFilter?: CoreNodeFilterConfig
-    /** 核心节点数量硬上限（未配置 regionRules 时生效） */
+    /**
+     * 主体文件夹白名单（全局图谱首屏的大区 = 这些文件夹；空 / 缺省 = 全部文件夹）。
+     * 邻居分组统一复用 `configuration.aggregation`，无该配置时按文件夹兜底。
+     */
+    folders?: string[]
+    /** 核心节点数量硬上限（未配主体白名单时生效） */
     coreNodeLimit?: number
     /** 首屏是否只显示核心节点（默认 true） */
     startCollapsed?: boolean

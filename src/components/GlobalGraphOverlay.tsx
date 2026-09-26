@@ -6,6 +6,7 @@ import type {
 import { getBasePath } from "../util/basePath";
 import { DEFAULT_GLOBAL_GRAPH_CFG } from "../options";
 import type { GraphOptions } from "./Graph";
+import { resolveGraphGrouping } from "../util/graphGrouping";
 import style from "./styles/global-graph-overlay.scss";
 // @ts-expect-error - inline script imported as string by esbuild loader
 import script from "./scripts/graph.inline.ts";
@@ -31,7 +32,14 @@ import script from "./scripts/graph.inline.ts";
  */
 export default ((userOpts?: Partial<GraphOptions>) => {
   const GlobalGraphOverlay: QuartzComponent = ({ cfg }: QuartzComponentProps) => {
-    const globalGraph = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...userOpts?.globalGraph };
+    const userGlobal = userOpts?.globalGraph;
+    // 内部分组值从「主体文件夹白名单 + 站点聚合上下文」合成（与 graphGlobal emitter 同一套规则）
+    const grouping = resolveGraphGrouping({
+      folders: userGlobal?.folders,
+      folderDepth: (cfg as unknown as { aggregation?: { root?: { depth?: number } } }).aggregation?.root
+        ?.depth,
+    });
+    const globalGraph = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...grouping, ...userGlobal };
     // 传给 inline 脚本用于拼预计算 JSON 路径（与 Graph 组件同一套规则）
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed 需要；全局图谱 depth < 0 恒为预计算产物，这里与实际值保持一致
