@@ -95,3 +95,37 @@ describe("folder partition force layout", () => {
     }
   });
 });
+
+describe("dimension graph drag", () => {
+  function sustainedDrag(view: "local" | "dimension", radial: boolean) {
+    const nodes: Node[] = Array.from({ length: 24 }, (_, i) => ({ id: `cluster:${i}`, radius: 5 }));
+    let dragging = false;
+    const simulation = createGraphSimulation<Node, { source: Node; target: Node }>(
+      nodes, [], view,
+      { repelForce: 0.3, centerForce: 0.3, linkDistance: 50, enableRadial: radial },
+      734, 250, createAggAwareCollide<Node>(node => node.radius, new Map(), () => dragging, false),
+    ).stop();
+    const diameter = () => Math.max(...nodes.flatMap(a => nodes.map(b => Math.hypot(a.x! - b.x!, a.y! - b.y!))));
+    for (let i = 0; i < 1000 && simulation.alpha() >= simulation.alphaMin(); i++) simulation.tick();
+    const initial = diameter();
+    dragging = true;
+    nodes[0].fx = nodes[0].x! + 60;
+    nodes[0].fy = nodes[0].y!;
+    simulation.alphaTarget(simulationSettings(view).dragAlpha);
+    simulation.tick(400);
+    const during = diameter();
+    simulation.tick(400);
+    const late = diameter();
+    simulation.stop();
+    return { initial, during, late };
+  }
+
+  it("bounds the spread during a sustained drag of disconnected value-page nodes", () => {
+    const legacy = sustainedDrag("local", false);
+    const fixed = sustainedDrag("dimension", true);
+    console.log("dimension drag diameter", { legacy, fixed });
+    expect(legacy.late).toBeGreaterThan(legacy.during * 1.05);
+    expect(fixed.late).toBeLessThan(fixed.during * 1.05);
+    expect(fixed.late).toBeLessThan(legacy.late);
+  });
+});

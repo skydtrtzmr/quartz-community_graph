@@ -87,7 +87,7 @@ const DIMENSION_GRAPH_DEFAULTS = {
   showTags: false,
   removeTags: [],
   focusOnHover: false,
-  enableRadial: false,
+  enableRadial: true,
   drag: true,
   zoom: true,
 }

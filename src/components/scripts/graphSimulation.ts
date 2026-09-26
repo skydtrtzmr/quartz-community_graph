@@ -11,9 +11,9 @@ import {
 import type { D3Config } from "../Graph";
 import type { GraphView } from "./views";
 
-/** Folder partitions and global regions share one force/interaction profile. */
+/** Multi-center views need stronger damping and gentler drag reheating. */
 export function simulationSettings(view: GraphView) {
-  const overview = view === "global" || view === "folder";
+  const overview = view === "global" || view === "folder" || view === "dimension";
   return {
     alphaMin: overview ? 0.001 : 0.002,
     alphaDecay: overview ? 1 - Math.pow(0.001, 1 / 300) : 0.05,
