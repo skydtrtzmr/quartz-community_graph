@@ -80,4 +80,14 @@ describe("Graph Component", () => {
     expect(local.enableRadial).toBe(false);
     expect(local.repelForce).toBe(0.6);
   });
+
+  it("文件夹页可单独调整边长，不影响全局图谱", () => {
+    const options: GraphOptions = {
+      globalGraph: { linkDistance: 135 },
+      folderGraph: { linkDistance: 125 },
+    };
+    const props = { fileData: { slug: "项目/index" }, cfg: { baseUrl: "127.0.0.1:9766/demo", locale: "zh-CN" } } as QuartzComponentProps;
+    expect(emittedConfig(FolderGraph(options)(props))?.linkDistance).toBe(125);
+    expect(emittedConfig(GlobalGraphOverlay(options)(props))?.linkDistance).toBe(135);
+  });
 });

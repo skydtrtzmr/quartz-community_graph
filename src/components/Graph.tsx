@@ -73,6 +73,8 @@ export interface GraphOptions {
     localDepth?: number;
   };
   localGraph?: Partial<GraphUserConfig>;
+  /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
+  folderGraph?: Pick<Partial<GraphUserConfig>, "linkDistance">;
   globalGraph?: Partial<GraphUserConfig>;
 }
 

@@ -148,6 +148,9 @@
       "localGraph": {
         "type": "object"
       },
+      "folderGraph": {
+        "type": "object"
+      },
       "globalGraph": {
         "type": "object"
       }

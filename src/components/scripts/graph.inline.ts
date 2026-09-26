@@ -36,6 +36,7 @@ import type { D3Config } from "../Graph"
 import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
 import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
 import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
+import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
@@ -79,9 +80,9 @@ interface LocalGraphData {
 const DIMENSION_GRAPH_DEFAULTS = {
   depth: 1,
   scale: 1.1,
-  repelForce: 0.3,
+  repelForce: 0.38,
   centerForce: 0.3,
-  linkDistance: 50,
+  linkDistance: 72,
   fontSize: 0.75,
   opacityScale: 1,
   showTags: false,
@@ -1553,7 +1554,8 @@ function main() {
             isRegion: true,
             regionChildIds: group.members.map((member) => member.id),
             edgeNodeCount: group.members.length,
-            aggCollapsedRadius: Math.min(40, Math.max(25, 5 + Math.sqrt(group.members.length) * 3)),
+            // 文件夹页画布较小，分区圈不必与全局大区等大。
+            aggCollapsedRadius: Math.min(30, Math.max(18, 4 + Math.sqrt(group.members.length) * 2.2)),
           }
           regionNodeInfoMap.set(regionId, {
             node: regionNode,
@@ -1789,6 +1791,11 @@ function main() {
       return baseRadius + Math.sqrt(linkCount)
     }
 
+    const focusRingOffset = 3
+    const focusRingStrokeWidth = 2.5
+    const focusOuterRadius = (node: NodeData) =>
+      nodeRadius(node) + focusRingOffset + focusRingStrokeWidth / 2
+
     const width = graph.offsetWidth
     const height = Math.max(graph.offsetHeight, 250)
 
@@ -1805,6 +1812,10 @@ function main() {
     console.log(`[Graph] ${graphView} layout: radial=${enableRadial}, velocityDecay=${simulation.velocityDecay()}`)
 
     simulation.on("end", () => {
+      // 局部图谱只在展开布局收敛前固定被点击的聚合节点；之后恢复受力运动。
+      if (graphView === "local") {
+        for (const node of graphData.nodes) releaseExpansionPin(node)
+      }
       console.log("[DEBUG] D3 simulation 布局计算完成（已收敛）")
     })
 
@@ -2255,8 +2266,8 @@ function main() {
       }
       // 当前视角的真实主节点：加外环，不改变 isCore 及节点半径/布局。
       if (n.isFocus && !isTagNode) {
-        gfx.circle(0, 0, r + 3).stroke({
-          width: 2.5,
+        gfx.circle(0, 0, r + focusRingOffset).stroke({
+          width: focusRingStrokeWidth,
           color: computedStyleMap["--secondary"],
           alpha: 0.95,
         })
@@ -2933,9 +2944,10 @@ function main() {
         const radius = isAggNode
           ? Math.min(180, Math.max(baseRadius, Math.sqrt(newNodes.length) * 24))
           : baseRadius
+        const nestedLocal = graphView === "local" && isAggNode && aggToCoreMap.get(nodeId)?.startsWith("agg:") === true
         for (const [index, edgeNode] of newNodes.entries()) {
           const angle = isAggNode
-            ? outwardAngle + (newNodes.length <= 1 ? 0 : (index / (newNodes.length - 1) - 0.5) * Math.PI * 2 / 3)
+            ? expansionSeedAngle(outwardAngle, index, newNodes.length, nestedLocal)
             : index * Math.PI * 2 / Math.max(1, newNodes.length)
           edgeNode.x = parentNode.x + Math.cos(angle) * radius
           edgeNode.y = parentNode.y + Math.sin(angle) * radius
@@ -3511,7 +3523,11 @@ function main() {
             const r = nodeRadius(n.simulationData)
             n.label.position.set(posX, posY - r - 16)
           } else {
-            n.label.position.set(posX, posY)
+            // 普通标签也放在圆外；主节点按外环半径留白，避免文字压住外环。
+            const r = n.simulationData.isFocus
+              ? focusOuterRadius(n.simulationData)
+              : nodeRadius(n.simulationData)
+            n.label.position.set(posX, posY - r - 2)
           }
         }
         // 聚合节点展开背景圆圈跟随移动
@@ -3576,6 +3592,12 @@ function main() {
           const dist = Math.sqrt(dx * dx + dy * dy) || 1
           lineX1 = x1 + (dx / dist) * ld.source.aggCollapsedRadius
           lineY1 = y1 + (dy / dist) * ld.source.aggCollapsedRadius
+        } else if (ld.source.isFocus) {
+          const dx = x2 - x1
+          const dy = y2 - y1
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          lineX1 = x1 + (dx / dist) * focusOuterRadius(ld.source)
+          lineY1 = y1 + (dy / dist) * focusOuterRadius(ld.source)
         }
 
         // target 端裁剪（大区节点）
@@ -3585,10 +3607,16 @@ function main() {
           const dist = Math.sqrt(dx * dx + dy * dy) || 1
           lineX2 = x2 + (dx / dist) * ld.target.aggCollapsedRadius
           lineY2 = y2 + (dy / dist) * ld.target.aggCollapsedRadius
+        } else if (ld.target.isFocus) {
+          const dx = x1 - x2
+          const dy = y1 - y2
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          lineX2 = x2 + (dx / dist) * focusOuterRadius(ld.target)
+          lineY2 = y2 + (dy / dist) * focusOuterRadius(ld.target)
         }
 
         if (showArrows) {
-          const targetR = ld.target.isRegion ? 0 : nodeRadius(ld.target)
+          const targetR = ld.target.isRegion || ld.target.isFocus ? 0 : nodeRadius(ld.target)
           const dx = lineX2 - lineX1
           const dy = lineY2 - lineY1
           const len = Math.sqrt(dx * dx + dy * dy)

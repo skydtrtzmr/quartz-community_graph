@@ -27,6 +27,9 @@ export interface GraphProOptions {
     [key: string]: unknown
   }
 
+  /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱。 */
+  folderGraph?: { linkDistance?: number }
+
   /** 交互期 + 全局图谱预计算参数 */
   globalGraph?: {
     showAggregatedNodeLinks?: boolean

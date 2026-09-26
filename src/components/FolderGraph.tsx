@@ -30,7 +30,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
       ...userOpts?.localGraph,
       repelForce: globalLayout.repelForce as number,
       centerForce: globalLayout.centerForce as number,
-      linkDistance: globalLayout.linkDistance as number,
+      linkDistance: userOpts?.folderGraph?.linkDistance ?? globalLayout.linkDistance as number,
       enableRadial: globalLayout.enableRadial as boolean,
     },
   }, "folder")
