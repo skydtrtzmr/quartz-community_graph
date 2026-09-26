@@ -1,4 +1,4 @@
-import type { AggregationRule } from "./aggregation";
+import { isFolderIndexSlug, type AggregationRule } from "./aggregation";
 
 /** Consumer view of aggregation.json v1. Inheritance is resolved by aggregation-pro. */
 export interface SharedAggregation {
@@ -46,6 +46,43 @@ export interface SharedGroup<T> {
   remainingRules: AggregationRule[];
 }
 
+export const DEFAULT_CORE_AGGREGATION_MAX_LEVELS = 2;
+
+/** Select the prefix before grouping: skipped fields must not pull later fields into view. */
+export function globalCoreRules(
+  artifact: SharedAggregation, folder: string,
+  maxLevels = DEFAULT_CORE_AGGREGATION_MAX_LEVELS,
+): AggregationRule[] {
+  if (!Number.isInteger(maxLevels) || maxLevels < 1) {
+    throw new Error("[Graph] globalGraph.coreAggregationMaxLevels must be a positive integer");
+  }
+  if (!Object.hasOwn(artifact.resolved, folder)) {
+    throw new Error(`[Graph] aggregation.json missing context ${folder}; rebuild with --reset`);
+  }
+  return artifact.resolved[folder].slice(0, maxLevels);
+}
+
+/** Global non-core neighbors stop at folders, even when only one folder is present. */
+export function groupGlobalNeighbors<T>(
+  items: T[], artifact: SharedAggregation, describe: (item: T) => AggregationItem,
+): { groups: SharedGroup<T>[]; leaves: T[] } {
+  const buckets = new Map<string, T[]>();
+  for (const item of items) {
+    const key = keyFor(describe(item), artifact.root);
+    if (key === null) continue; // 文件夹索引页不作为任何文件夹的成员
+    const members = buckets.get(key) ?? [];
+    members.push(item);
+    buckets.set(key, members);
+  }
+  if (![...buckets.values()].some(members => members.length >= artifact.minGroupSize)) {
+    return { groups: [], leaves: [...items] };
+  }
+  return {
+    groups: [...buckets].map(([key, members]) => ({ key, members, rule: artifact.root, remainingRules: [] })),
+    leaves: [],
+  };
+}
+
 function firstValue(value: unknown): unknown {
   const present = (v: unknown) => v !== undefined && v !== null && v !== "";
   return Array.isArray(value) ? value.find(present) : present(value) ? value : undefined;
@@ -65,6 +102,8 @@ function stripWikilink(value: string): string {
 
 function keyFor(item: AggregationItem, rule: AggregationRule): string | null {
   if (rule.type === "folder") {
+    // 文件夹索引页不是任何文件夹的成员（它是文件夹自身的门面）
+    if (isFolderIndexSlug(item.slug)) return null;
     // Use the full source slug: simplified folder/index slugs lose the last component.
     return (
       item.slug
@@ -92,7 +131,8 @@ export function groupShared<T>(
   if (rules === undefined) {
     const contexts = new Map<string, T[]>();
     for (const item of eligible) {
-      const context = keyFor(describe(item), artifact.root)!;
+      const context = keyFor(describe(item), artifact.root);
+      if (context === null) continue; // 文件夹索引页不归属任何文件夹上下文
       const members = contexts.get(context) ?? [];
       members.push(item);
       contexts.set(context, members);
@@ -122,10 +162,14 @@ export function groupShared<T>(
     if (keys.every((key) => key === null)) continue;
     const buckets = new Map<string, T[]>();
     eligible.forEach((item, index) => {
-      const key = keys[index] ?? "未设置";
-      const members = buckets.get(key) ?? [];
+      const key = keys[index];
+      // folder 规则下 null = 文件夹索引页（不是成员，直接跳过，不落「未设置」）；
+      // field 规则下 null = 字段缺值，仍归入「未设置」
+      if (key === null && rule.type === "folder") return;
+      const bucketKey = key ?? "未设置";
+      const members = buckets.get(bucketKey) ?? [];
       members.push(item);
-      buckets.set(key, members);
+      buckets.set(bucketKey, members);
     });
     if (rule.type === "folder" && buckets.size <= 1) continue;
     if (![...buckets.values()].some(members => members.length >= artifact.minGroupSize)) continue;

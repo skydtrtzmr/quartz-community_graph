@@ -97,13 +97,15 @@ describe("shared local aggregation", () => {
     expect(groupShared([note("任务/a"), note("任务/b")], artifact, identity).groups).toEqual([]);
   });
 
-  it("preserves source index directory context", () => {
+  it("excludes the folder index page but keeps the folder's real members", () => {
     const items = [
       note("任务/index", { status: "完成" }),
+      note("任务/a", { status: "完成" }),
       note("任务/b", { status: "完成" }),
     ];
     const result = groupShared(items, artifact, identity);
-    expect(result.groups[0].members).toHaveLength(2);
+    // 文件夹索引页不算该文件夹的成员：只按 a/b 成组
+    expect(result.groups[0].members.map((item) => item.slug)).toEqual(["任务/a", "任务/b"]);
     expect(result.leaves).toEqual([]);
   });
 

@@ -13,6 +13,8 @@
  * 避免出现「已经按范围筛掉了，却还在图上当上下文」的误导。
  */
 
+import { isFolderIndexSlug } from "./aggregation"
+
 export interface DimensionEdge {
   source: string
   target: string
@@ -58,8 +60,9 @@ export function normalizeSlug(raw: string | undefined | null): string {
   return (raw ?? "").replace(/\/index$/, "").replace(/\/+$/, "")
 }
 
-/** scope 语义：前缀匹配；`/` 表示顶级目录 */
+/** scope 语义：前缀匹配；`/` 表示顶级目录。文件夹索引页（目录自身）不计入任何 scope */
 export function inScope(slug: string, scope: string): boolean {
+  if (isFolderIndexSlug(slug)) return false
   if (scope === "") return true
   if (scope === "/") return !slug.includes("/")
   return slug.startsWith(scope + "/")

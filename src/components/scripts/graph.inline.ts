@@ -37,7 +37,7 @@ import { AggregationRule, commonFolderOf } from "../../util/aggregation"
 import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
 import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
-import { groupShared, readSharedAggregation } from "../../util/sharedAggregation"
+import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -465,6 +465,7 @@ function main() {
       showAggregatedNodeLinks = true,
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
+      coreAggregationMaxLevels,
       regionRules,
       expandCoresOnRegionOpen = true,
       filterNonCoreNodes = true,
@@ -766,8 +767,10 @@ function main() {
       const details = contentData.get(node.id)
       return { slug: details?.slug ?? node.id, frontmatter: details?.frontmatter }
     }
-    const createSharedGroups = (parent: NodeData, members: NodeData[], rules?: AggregationRule[]) => {
-      const result = groupShared(members, sharedAggregation, describeAggregationNode, rules)
+    const createSharedGroups = (parent: NodeData, members: NodeData[], rules?: AggregationRule[], folderOnly = false) => {
+      const result = folderOnly
+        ? groupGlobalNeighbors(members, sharedAggregation, describeAggregationNode)
+        : groupShared(members, sharedAggregation, describeAggregationNode, rules)
       const nodes = [...result.leaves]
       for (const group of result.groups) {
         const { rule, key, remainingRules } = group
@@ -1316,7 +1319,7 @@ function main() {
             l.source.id === center.id ? [l.target.id] : l.target.id === center.id ? [l.source.id] : []))
           neighbors.delete(center.id)
           const members = nonOrphanNodes.filter(n => neighbors.has(n.id) && (!isGlobalGraph || !n.isCore) && !n.isAggregation)
-          const grouped = createSharedGroups(center, members)
+          const grouped = createSharedGroups(center, members, undefined, isGlobalGraph)
           nodeToEdgeNodes.set(center.id, grouped)
           nodeToEdgeLinks.set(center.id, [
             ...nonOrphanLinks.filter(l => (l.source.id === center.id || l.target.id === center.id) && grouped.some(n => n.id === (l.source.id === center.id ? l.target.id : l.source.id))),
@@ -1613,7 +1616,7 @@ function main() {
           regionNodeInfoMap.set(regionId, {
             node: regionNode,
             childCores,
-            remainingRules: regionRules.slice(1),
+            remainingRules: sharedAggregation ? globalCoreRules(sharedAggregation, groupKey, coreAggregationMaxLevels) : regionRules.slice(1),
             currentField: rule.type === "folder" ? "📁" : (rule.field ?? rule.type),
           })
           for (const c of childCores) {
@@ -1939,6 +1942,7 @@ function main() {
 
     let hoveredNodeId: string | null = null
     let hoveredNeighbours: Set<string> = new Set()
+    let edgeLabelDefaultAlpha = 0
     const linkRenderData: LinkRenderData[] = []
     const nodeRenderData: NodeRenderData[] = []
 
@@ -2027,7 +2031,7 @@ function main() {
             l.label.style.fill = computedStyleMap["--darkgray"]
             tweenGroup.add(
               new Tweened<Text>(l.label).to(
-                { alpha: l.label.alpha, scale: { x: defaultScale, y: defaultScale } },
+                { alpha: edgeLabelDefaultAlpha, scale: { x: defaultScale, y: defaultScale } },
                 100,
               ),
             )
@@ -2461,7 +2465,7 @@ function main() {
       // [REGION] 大区节点展开：加入内部核心节点及其邻接边缘节点
       if (targetNode?.isRegion || regionNodeInfoMap.has(nodeId)) {
         const nodesToAdd: NodeData[] = []
-        const linksToAdd: LinkData[] = []
+        let linksToAdd: LinkData[] = []
 
         // 获取子核心节点列表（优先从 map 取，fallback 从节点属性恢复）
         let childCores: NodeData[]
@@ -2478,8 +2482,8 @@ function main() {
         const regionInfo = regionNodeInfoMap.get(nodeId)
         const remainingRules = regionInfo?.remainingRules ?? []
 
-        if (graphView === "folder" && sharedAggregation) {
-          // 文件夹一级分区沿用 v4 的 region 展开形态，后续级别仍用共享规则分组。
+        if ((graphView === "folder" || isGlobalGraph) && sharedAggregation) {
+          // 全局/文件夹分区内的核心集合均沿共享字段链展开。
           const regionNode = graphData.nodes.find((node) => node.id === nodeId)!
           const children = createSharedGroups(regionNode, childCores, remainingRules)
           const visible = new Set([...graphData.nodes, ...children].map((node) => node.id))
@@ -2490,6 +2494,14 @@ function main() {
           linksToAdd.push(...allLinks.filter(
             (link) => visible.has(link.source.id) && visible.has(link.target.id),
           ))
+          // Shared-neighbor pools can contain the same real edge more than once.
+          const seenLinks = new Set(graphData.links.map(link => JSON.stringify([link.source.id, link.target.id])))
+          linksToAdd = linksToAdd.filter(link => {
+            const key = JSON.stringify([link.source.id, link.target.id])
+            if (seenLinks.has(key)) return false
+            seenLinks.add(key)
+            return true
+          })
         } else if (remainingRules.length > 0 && childCores.length > 0) {
           // [REGION] 有多层规则：按 remainingRules 创建子聚合节点
           const coresForNextRule = childCores.filter(
@@ -3021,7 +3033,7 @@ function main() {
             }
             // 再处理聚合节点自身的展开状态
             if (expandedNodeIds.has(aggId)) {
-              if (graphView === "folder") collapseNode(aggId)
+              if (sharedAggregation || graphView === "folder") collapseNode(aggId)
               else {
                 expandedNodeIds.delete(aggId)
                 expandedAggChildren.delete(aggId)
@@ -3429,6 +3441,7 @@ function main() {
 
           const s = transform.k * opacityScale
           const scaleOpacity = Math.max((s - 1) / 3.75, 0)
+          edgeLabelDefaultAlpha = scaleOpacity
           const activeNodeLabels = new Set(
             nodeRenderData.filter((n) => n.active).map((n) => n.label),
           )

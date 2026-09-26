@@ -4,6 +4,14 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 ## 共享聚合规则
 
+全局图谱：首屏仍为核心文件夹分区；分区内的核心集合按 `aggregation.json.resolved[目录]`
+取前 N 项逐级聚合。`options.globalGraph.coreAggregationMaxLevels` 为正整数，默认 2，
+不计首屏文件夹层；在分组前截取，即使前两项缺值也不会补用第三项。
+此选项仅影响全局图谱，字段顺序取自共享产物，不跟随浏览器配置面板。
+实际核心节点展开后，其非核心邻居只按共享 `root` 的文件夹层级分组，
+不再细分字段（只有一个邻居文件夹也保留该组，仍遵循共享的最小分组阈值）。
+核心间真实边在两端可见时恢复，不生成重复核心或代理边。局部/文件夹/维度图谱规则不变。
+
 配置了 `configuration.aggregation` 时，侧栏局部图及放大局部图读取
 `static/aggregation.json`，以当前页面为中心，合并入链、出链邻居后分组。
 规则值只来自该产物，graph-pro 不解析目录继承规则。
@@ -32,6 +40,9 @@ minGroupSize，所有类别统一显示聚合节点（含单成员类别）；�
 多级展开中的“原中心”一直指最初的页面/核心节点，而非中间聚合节点。
 
 ## 文件夹页图谱布局
+
+后续待办：文件夹页的核心字段层数统一设计另行实施；`aggregation.json` 的字段对象
+改为字符串数组也单独迁移（需版本升级及各消费插件同步）。当前对象格式保留是兼容选择。
 
 `FolderGraph` 的分区复用 `globalGraph` 的 `repelForce`、`centerForce`、
 `linkDistance`、`enableRadial`，以及全局图谱的速度衰减、冷却和拖拽重启参数。

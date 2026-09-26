@@ -28,7 +28,7 @@ import { joinSegments } from "@quartz-community/types"
 import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
 import { readFile } from "node:fs/promises"
-import { groupShared, readSharedAggregation } from "../util/sharedAggregation"
+import { globalCoreRules, groupGlobalNeighbors, readSharedAggregation } from "../util/sharedAggregation"
 import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
 import {
   extractGroupKey,
@@ -108,6 +108,8 @@ interface Options {
   folders?: string[]
   /** 核心节点数量硬上限 */
   coreNodeLimit?: number
+  /** 核心集合只使用共享规则链前 N 项（默认 2） */
+  coreAggregationMaxLevels?: number
   /** 全局图谱是否默认收起 */
   startCollapsed?: boolean
   /** 是否过滤孤儿节点 */
@@ -367,7 +369,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     if (shared) {
       // Every core owns its own membership, including neighbors shared with other cores.
       for (const [coreId, edgeIds] of Object.entries(nodeToEdgeNodeIds)) {
-        const grouped = groupShared(edgeIds, shared, id => {
+        const grouped = groupGlobalNeighbors(edgeIds, shared, id => {
           const details = contentData.get(id as SimpleSlug)
           return { slug: details?.slug ?? id, frontmatter: details?.frontmatter }
         })
@@ -552,7 +554,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
         const regionId = `region:${groupKey}`
         regionNodes[regionId] = {
           childCoreIds,
-          remainingRules: regionRules.slice(1),
+          remainingRules: shared ? globalCoreRules(shared, groupKey, opts.coreAggregationMaxLevels) : regionRules.slice(1),
           currentField: rule.type === "folder" ? "📁" : (rule.field ?? rule.type),
           displayText: rule.type === "folder" ? folderDisplay(groupKey) : groupKey,
         }
@@ -671,7 +673,9 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       aggToCore,
       regionNodes,
       coreToRegion,
-      allChildLinks: childLinksPool,
+      // Append core-to-core relations without shifting existing childLinkIndices.
+      allChildLinks: [...childLinksPool, ...effectiveLinks.filter(link =>
+        coreNodeIdSet.has(link.source) && coreNodeIdSet.has(link.target))],
       coreNodeIds: [...coreNodeIdSet],
       edgeNodeIds: [...edgeNodeIdSet],
       nodeLinkCounts: Object.fromEntries(nodeLinkCount),

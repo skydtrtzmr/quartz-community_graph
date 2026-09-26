@@ -43,6 +43,26 @@ export interface CoreNodeFilterRule {
 export type CoreNodeFilterConfig = CoreNodeFilterRule[]
 
 /**
+ * 文件夹索引页（`Index.md` / 目录页）判定。
+ *
+ * 这类 slug 代表「文件夹自身」而不是文件夹里的内容实体，可能的形式：
+ * - `项目/`（`simplifySlug` 的结果，带尾斜杠）
+ * - `项目/index`（完整 slug）
+ * - 根目录的 `index` / `/` / ``（空串）
+ *
+ * ⚠️ 文件夹归属判定（核心节点 / 大区分组 / 邻居分组 / scope）必须排除它：
+ * 它的角色是「文件夹门面 / 大区显示名（`folderTitles`）」，若同时被算作该文件夹的成员，
+ * 就会在文件夹里凭空多出一条「文件夹自己」的节点，与目录树（trie 把 `folder/index.md`
+ * 折进文件夹节点、不单列）的口径也不一致。
+ */
+export function isFolderIndexSlug(slug: string | undefined | null): boolean {
+  const s = slug ?? ""
+  if (s === "" || s === "/" || s === "index") return true
+  if (s.endsWith("/")) return true
+  return s.endsWith("/index")
+}
+
+/**
  * 判断节点是否匹配核心节点过滤规则
  * @param slug 节点 slug
  * @param frontmatter 节点 frontmatter
@@ -58,6 +78,8 @@ export function matchCoreNodeFilter(
 
   for (const rule of rules) {
     if (rule.type === "folder") {
+      // 文件夹索引页不代表文件夹内的内容实体，不作为该文件夹的核心成员
+      if (isFolderIndexSlug(slug)) continue
       const parts = slug.split("/")
       if (parts.length <= 1) continue
       const depth = rule.depth ?? 1
@@ -111,6 +133,8 @@ export function extractGroupKey(
 ): string | null {
   switch (rule.type) {
     case "folder": {
+      // 文件夹索引页不归属任何文件夹分组（它是文件夹自身的门面）
+      if (isFolderIndexSlug(item.slug)) return null
       const parts = (item.slug ?? "").split("/")
       if (parts.length <= 1) return "/"
       const depth = rule.depth ?? 1

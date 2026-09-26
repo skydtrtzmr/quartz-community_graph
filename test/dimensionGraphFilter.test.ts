@@ -45,8 +45,11 @@ describe("scope 语义（前缀匹配）", () => {
     expect(normalizeScope("")).toBe("")
     expect(inScope("项目/p1", "项目")).toBe(true)
     expect(inScope("项目组/p1", "项目")).toBe(false)
-    expect(inScope("index", "")).toBe(true)
-    expect(inScope("index", "/")).toBe(true)
+    // 文件夹索引页代表目录自身，不算任何 scope 内的实体
+    expect(inScope("index", "")).toBe(false)
+    expect(inScope("index", "/")).toBe(false)
+    expect(inScope("项目/", "项目")).toBe(false)
+    expect(inScope("项目/index", "项目")).toBe(false)
     expect(inScope("任务/t1", "/")).toBe(false)
   })
 })

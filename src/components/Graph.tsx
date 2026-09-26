@@ -45,6 +45,8 @@ export interface D3Config {
   coreNodeFilter?: CoreNodeFilterConfig;
   /** 核心节点数量硬上限（未配置 regionRules 时生效） */
   coreNodeLimit?: number;
+  /** 全局核心集合的字段聚合上限，不计文件夹层（默认 2） */
+  coreAggregationMaxLevels?: number;
   /** 大区聚合规则（配置后首屏显示大区节点，点击展开） */
   regionRules?: AggregationRule[];
   /** 展开大区时是否连带展开内部核心节点 */

@@ -9,6 +9,8 @@
  * - `localGraph`  ← settings/<domain>/quartz.layout.json 的 `graph` 段（局部图谱）
  * - `globalGraph` ← settings/<domain>/quartz.layout.json 的 `graph` 段（全局图谱 + 预计算参数）
  */
+import { DEFAULT_CORE_AGGREGATION_MAX_LEVELS } from "./util/sharedAggregation"
+
 export interface GraphProOptions {
   /** 构建期：本地图谱预计算（对齐 settings 的 graph.precomputeLocal / localDepth） */
   graph?: {
@@ -37,6 +39,8 @@ export interface GraphProOptions {
     folders?: string[]
     /** 核心节点数量硬上限（未配主体白名单时生效） */
     coreNodeLimit?: number
+    /** 核心集合最多使用共享字段链的前 N 项（正整数，默认 2；不计文件夹层） */
+    coreAggregationMaxLevels?: number
     /** 首屏是否只显示核心节点（默认 true） */
     startCollapsed?: boolean
     /** 大区展开后是否同时展开内部核心节点（默认 false；false 时核心节点保持收起） */
@@ -82,6 +86,7 @@ export const DEFAULT_GLOBAL_GRAPH_CFG: Record<string, unknown> = {
   countLabelMin: 7,
   countLabelMaxDisplay: 120,
   coreNodeLimit: 100,
+  coreAggregationMaxLevels: DEFAULT_CORE_AGGREGATION_MAX_LEVELS,
   filterNonCoreNodes: true,
   expandCoresOnRegionOpen: false,
 }
