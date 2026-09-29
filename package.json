@@ -136,6 +136,7 @@
         "removeTags": [],
         "focusOnHover": true,
         "enableRadial": true,
+        "showAggregatedNodeLinks": false,
         "coreNodeLimit": 100,
         "startCollapsed": true,
         "filterOrphans": true,

@@ -40,6 +40,7 @@ import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import { selectSharedRules } from "../../util/dimensionSelection"
+import { showOriginalCenterLink } from "../../util/aggregatedLinks"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -485,7 +486,7 @@ function main() {
       startCollapsed = false,
       countLabelMaxDisplay = 99,
       aggregation,
-      showAggregatedNodeLinks = true,
+      showAggregatedNodeLinks = false,
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
       coreAggregationMaxLevels,
@@ -2760,19 +2761,18 @@ function main() {
           edgeLinksToAdd = edgeNodesToAdd.map(child => ({ source: aggInfo.node, target: child }))
           const visible = new Set([...graphData.nodes, ...edgeNodesToAdd].map(n => n.id))
           const expandedMembers = new Set(rawChildren.map(n => n.id))
+          const activeOwners = [...aggNodeInfoMap].filter(([id]) => id === nodeId || expandedNodeIds.has(id))
+            .map(([, info]) => {
+              let root = info.coreId
+              while (aggToCoreMap.has(root)) root = aggToCoreMap.get(root)!
+              return { root, childIds: new Set(info.childNodes.map(n => n.id)) }
+            })
           edgeLinksToAdd.push(...allLinks.filter(l => {
             if (!visible.has(l.source.id) || !visible.has(l.target.id)) return false
             if (!expandedMembers.has(l.source.id) && !expandedMembers.has(l.target.id)) return false
             if (showAggregatedNodeLinks) return true
-            // Nested aggregation parents are not the original center. Follow the ownership chain.
-            for (const [id, info] of aggNodeInfoMap) {
-              if (id !== nodeId && !expandedNodeIds.has(id)) continue
-              let root = info.coreId
-              while (aggToCoreMap.has(root)) root = aggToCoreMap.get(root)!
-              if ((l.source.id === root && info.childNodes.some(n => n.id === l.target.id)) ||
-                  (l.target.id === root && info.childNodes.some(n => n.id === l.source.id))) return false
-            }
-            return true
+            return activeOwners.every(({ root, childIds }) =>
+              showOriginalCenterLink(l.source.id, l.target.id, root, childIds, false))
           }))
         } else if (aggInfo && aggInfo.remainingRules.length > 0) {
           const childNodes = rawChildren.filter(
@@ -2920,12 +2920,14 @@ function main() {
 
           // 添加叶子之间原有的连线，但过滤掉与所属核心节点的连线
           const childLinks = aggNodeToChildLinks.get(nodeId) ?? []
+          const rawChildIds = new Set(rawChildren.map(n => n.id))
           const visibleOrAddingIds = new Set([
             ...graphData.nodes.map((n) => n.id),
             ...edgeNodesToAdd.map((n) => n.id),
           ])
           for (const l of childLinks) {
-            if (coreId && (l.source.id === coreId || l.target.id === coreId)) continue
+            if (coreId && !showOriginalCenterLink(l.source.id, l.target.id, coreId,
+              rawChildIds, showAggregatedNodeLinks)) continue
             if (visibleOrAddingIds.has(l.source.id) && visibleOrAddingIds.has(l.target.id)) {
               edgeLinksToAdd.push(l)
             }

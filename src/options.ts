@@ -83,6 +83,7 @@ export const DEFAULT_GLOBAL_GRAPH_CFG: Record<string, unknown> = {
   removeTags: [],
   focusOnHover: true,
   enableRadial: true,
+  showAggregatedNodeLinks: false,
   showArrows: true,
   filterOrphans: true,
   startCollapsed: true,

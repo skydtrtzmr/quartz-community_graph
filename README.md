@@ -36,7 +36,7 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 插件代码或配置更新后先执行插件 build，再对站点执行一次 `--reset` 构建。
 
 `options.localGraph.showAggregatedNodeLinks` 和
-`options.globalGraph.showAggregatedNodeLinks`（默认 true）控制共享聚合展开后，
+`options.globalGraph.showAggregatedNodeLinks`（默认 false）控制聚合展开后，
 是否显示文件与原中心的真实连线。设为 false 时仍保留聚合父子连线及其他关系；
 多级展开中的“原中心”一直指最初的页面/核心节点，而非中间聚合节点。
 

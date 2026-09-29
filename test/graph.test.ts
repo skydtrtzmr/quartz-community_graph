@@ -76,9 +76,16 @@ describe("Graph Component", () => {
     }
     expect(folder.depth).toBe(1);
     expect(folder.showAggregatedNodeLinks).toBe(false);
+    expect(global.showAggregatedNodeLinks).toBe(true);
     expect(folder.coreNodeLimit).toBeUndefined();
     expect(local.enableRadial).toBe(false);
     expect(local.repelForce).toBe(0.6);
+  });
+
+  it("defaults both local and global views to no duplicate center links", () => {
+    const props = { fileData: { slug: "项目/a" }, cfg: { baseUrl: "127.0.0.1:9766/demo", locale: "zh-CN" } } as QuartzComponentProps;
+    expect(emittedConfig(Graph({})(props))?.showAggregatedNodeLinks).toBe(false);
+    expect(emittedConfig(GlobalGraphOverlay({})(props))?.showAggregatedNodeLinks).toBe(false);
   });
 
   it("文件夹页可单独调整边长，不影响全局图谱", () => {
