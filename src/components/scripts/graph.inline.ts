@@ -39,6 +39,7 @@ import { createGraphSimulation, createAggAwareCollide, simulationSettings } from
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
+import { selectSharedRules } from "../../util/dimensionSelection"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -292,6 +293,27 @@ function main() {
   // 每次新的导航都会递增世代，旧的异步渲染检测到世代变化后自我废弃
   let renderGeneration = 0
 
+  function readDimensionOrder(folder: string, basePath: string): string[] {
+    try {
+      const raw = localStorage.getItem(`quartz:dimensionOrder:${basePath}:${folder}`)
+      const value = raw ? JSON.parse(raw) : []
+      return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+    } catch {
+      return []
+    }
+  }
+
+  function currentFolder(fullSlug: string): string {
+    const slug = fullSlug.replace(/\/index$/, "").replace(/\/+$/, "")
+    return fullSlug.endsWith("/index") ? slug : slug.slice(0, slug.lastIndexOf("/"))
+  }
+
+  function dimensionMaxLevels(): number {
+    const raw = document.querySelector<HTMLElement>(".explorer3")?.dataset.dimensionmaxlevels
+    const parsed = Number.parseInt(raw ?? "", 10)
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : 2
+  }
+
   function checkGeneration(gen: number): boolean {
     return gen === renderGeneration
   }
@@ -491,7 +513,13 @@ function main() {
       try {
         const response = await fetch(`${basePath ? `/${basePath}` : ""}/static/aggregation.json`)
         if (!response.ok) throw new Error(`aggregation.json: HTTP ${response.status}`)
-        sharedAggregation = readSharedAggregation(await response.json())
+        const artifact = readSharedAggregation(await response.json())
+        sharedAggregation = selectSharedRules(
+          artifact,
+          (folder) => readDimensionOrder(folder, basePath),
+          dimensionMaxLevels(),
+          currentFolder(fullSlug),
+        )
       } catch (error) {
         if (!checkGeneration(generation)) return () => {}
         graph.textContent = "聚合规则加载失败，请检查 aggregation.json 并重新构建。"
@@ -956,7 +984,9 @@ function main() {
           regionNodeInfoMap.set(regionId as SimpleSlug, {
             node: regionNode,
             childCores,
-            remainingRules: info.remainingRules,
+            remainingRules: sharedAggregation && regionId.startsWith("region:")
+              ? globalCoreRules(sharedAggregation, regionId.slice("region:".length), coreAggregationMaxLevels)
+              : info.remainingRules,
             currentField: info.currentField,
           })
         }
@@ -1218,7 +1248,7 @@ function main() {
           sourceField: l.sourceField,
         }))
 
-      // 构建产物里的目录→文件边只用于发现直属文件，不是真实内容关系。
+      // 构建产物里的目录→文件边只用于发现后代文件，不是真实内容关系。
       if (graphView === "folder") {
         allLinks = allLinks.filter((link) => link.source.id !== slug && link.target.id !== slug)
       }
@@ -1242,7 +1272,7 @@ function main() {
         (l) => nonOrphanNodeIds.has(l.source.id) && nonOrphanNodeIds.has(l.target.id),
       )
 
-      // 文件夹视角的直属文件是核心集合；其余视角保留各自规则。
+      // 文件夹视角的后代文件是核心集合；其余视角保留各自规则。
       selectCoreNodes({
         view: graphView,
         nodes: nonOrphanNodes,
@@ -3836,6 +3866,22 @@ function main() {
     }
     document.addEventListener("themechange", handleThemeChange)
     window.addCleanup(() => document.removeEventListener("themechange", handleThemeChange))
+
+    const onDimensionOrderChanged = () => {
+      cleanupLocalGraphs()
+      const activeOverlays = globalContainers().filter((container) => container.classList.contains("active"))
+      if (activeOverlays.length > 0) {
+        const graphContainer = activeOverlays[0]?.querySelector<HTMLElement>(".global-graph-container")
+        const view = graphContainer?.dataset.graphView
+        cleanupGlobalGraphs()
+        if (view === "global") void renderGlobalGraph()
+        else if (graphContainer?.dataset.dimensionGraph === "true") void renderDimensionGraphExpanded()
+        else void renderGlobalGraph(true)
+      }
+      void renderLocalGraph()
+    }
+    document.addEventListener("aggregation-order-changed", onDimensionOrderChanged)
+    window.addCleanup(() => document.removeEventListener("aggregation-order-changed", onDimensionOrderChanged))
 
     // 动态查询全局图谱容器：容器由 GlobalGraphOverlay 组件渲染（layout 放在 header，任何页面类型都在），
     // 这里按需查询而不是快照，SPA 导航后无需重建引用

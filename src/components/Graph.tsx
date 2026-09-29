@@ -39,7 +39,7 @@ export interface D3Config {
   countLabelMaxDisplay?: number;
   /** 边缘节点聚合规则（按字段把叶子分组为聚合节点） */
   aggregation?: AggregationRule[];
-  /** 展开聚合后保留子节点与原中心的真实连线，默认 true。 */
+  /** 展开聚合后保留子节点与原中心的真实连线；局部图谱默认 false。 */
   showAggregatedNodeLinks?: boolean;
   /** 核心节点过滤规则（满足任一规则即为核心节点） */
   coreNodeFilter?: CoreNodeFilterConfig;
@@ -101,6 +101,7 @@ const defaultOptions: GraphOptions = {
     showBadge: false,
     filterOrphans: false,
     startCollapsed: false,
+    showAggregatedNodeLinks: false,
     countLabelMaxDisplay: 120,
   },
 };

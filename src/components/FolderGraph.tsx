@@ -17,7 +17,7 @@ const SYSTEM_FOLDERS = ["_dimensions", "tags"]
  * - 挂在 `layout` 的 `beforeBody` → 出现在**正文里**（而不是右栏）
  *
  * 数据来源：当前页（文件夹 index）的局部图谱产物。graphLocal emitter 已为文件夹页
- * 补入「该文件夹的直属子项」出链（见 `emitters/graphLocal.ts` 的 `withFolderChildren`），
+ * 补入「该文件夹的全部后代内容文件」出链（见 `emitters/graphLocal.ts` 的 `withFolderChildren`），
  * 因此图谱展示的是「该文件夹内的文件 + 它们的关联节点」。
  */
 export default ((userOpts?: Partial<GraphOptions>) => {

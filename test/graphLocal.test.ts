@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { SimpleSlug } from "@quartz-community/types"
-import { directChildrenOf, djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
+import { descendantChildrenOf, directChildrenOf, djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
 
 /**
  * 运行时读取端（graph3.inline.ts）使用的算法副本。
@@ -63,5 +63,18 @@ describe("folder graph membership", () => {
     index.set("项目/子目录/p" as SimpleSlug, {} as never)
     index.set("人员/p" as SimpleSlug, {} as never)
     expect(directChildrenOf(index, "项目/" as SimpleSlug)).toHaveLength(75)
+  })
+  it("includes nested content when a parent has no direct files", () => {
+    const index = new Map<SimpleSlug, never>([
+      ["项目/" as SimpleSlug, {} as never],
+      ["项目/核心项目/" as SimpleSlug, {} as never],
+      ["项目/核心项目/2025/计划" as SimpleSlug, {} as never],
+      ["项目/核心项目/2025/总结" as SimpleSlug, {} as never],
+      ["人员/p" as SimpleSlug, {} as never],
+    ])
+    expect(descendantChildrenOf(index, "项目/" as SimpleSlug)).toEqual([
+      "项目/核心项目/2025/计划",
+      "项目/核心项目/2025/总结",
+    ])
   })
 })

@@ -114,12 +114,29 @@ export function directChildrenOf(
   return children
 }
 
+/** 文件夹页的全部后代内容文件，排除各级目录的 index.md。 */
+export function descendantChildrenOf(
+  linkIndex: Map<SimpleSlug, ContentDetails>,
+  folderSlug: SimpleSlug,
+): SimpleSlug[] {
+  const folder = folderSlug.replace(/\/index$/, "").replace(/\/+$/, "")
+  const prefix = folder === "" || folder === "index" ? "" : `${folder}/`
+  const children: SimpleSlug[] = []
+  for (const slug of linkIndex.keys()) {
+    if (slug === folderSlug || !slug.startsWith(prefix)) continue
+    const rest = slug.slice(prefix.length)
+    if (rest === "" || rest === "index" || rest.endsWith("/") || rest.endsWith("/index")) continue
+    children.push(slug)
+  }
+  return children
+}
+
 /**
  * 文件夹页（`xxx/index`）的 index.md 本身没有出链，局部图谱会只剩一个孤立节点。
- * 这里把「该文件夹的直属子项」补成它的出链，让文件夹页的局部图谱显示
- * 「该文件夹内的节点 + 它们的关联节点（depth=1 邻域）」。
+ * 这里把「该文件夹的后代内容文件」补成它的出链，让文件夹页的局部图谱显示
+ * 「该文件夹下的节点 + 它们的关联节点（depth=1 邻域）」。
  *
- * 只对文件夹页生效（其它页原样返回），不截断直属文件集合。
+ * 只对文件夹页生效（其它页原样返回），不截断文件集合。
  */
 function withFolderChildren(
   slug: SimpleSlug,
@@ -127,7 +144,10 @@ function withFolderChildren(
   linkIndex: Map<SimpleSlug, ContentDetails>,
 ): ContentDetails {
   if (!isFolderIndexSlug(slug)) return centerData
-  const children = directChildrenOf(linkIndex, slug)
+  // 根页不会挂载 FolderGraph，保留直属文件范围以免大型站点生成巨大的根图谱。
+  const children = slug === "/" || slug === "index"
+    ? directChildrenOf(linkIndex, slug)
+    : descendantChildrenOf(linkIndex, slug)
   if (children.length === 0) return centerData
   const existing = new Set(centerData.links ?? [])
   const extra = children.filter((child) => !existing.has(child))
@@ -195,10 +215,10 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
       } else {
         centerData = createVirtualContentDetails(slug, isTag)
       }
-      // 文件夹页：用该文件夹的直属子项补出链（index.md 本身无链接 → 否则图谱只剩孤立节点）
+      // 文件夹页：用该文件夹的后代内容文件补出链（index.md 本身无链接 → 否则图谱只剩孤立节点）
       centerData = withFolderChildren(slug, centerData, linkIndex)
 
-      // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
+      // 文件夹页深度 +1：depth1 = 文件夹下的节点，depth2 = 它们的关联节点
       const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
       const localGraph = calculateLocalGraph(
         slug,
@@ -384,12 +404,14 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         }
       }
 
-      // 文件夹图谱把直属文件作为核心集合；成员增删或其关联变化时也要重算父目录。
+      // 文件夹图谱包含所有后代文件；增删或关联变化时重算每一级祖先目录。
       for (const affected of [...affectedSlugs]) {
-        const slash = affected.lastIndexOf("/")
-        if (slash < 0) continue
-        const parent = affected.slice(0, slash + 1) as SimpleSlug
-        if (linkIndex.has(parent)) affectedSlugs.add(parent)
+        let slash = affected.lastIndexOf("/")
+        while (slash >= 0) {
+          const parent = affected.slice(0, slash + 1) as SimpleSlug
+          if (linkIndex.has(parent)) affectedSlugs.add(parent)
+          slash = affected.lastIndexOf("/", slash - 1)
+        }
       }
 
       // 删除已不存在的文件对应的 local graph
@@ -490,7 +512,7 @@ function calculateLocalGraph(
 
     if (currentDepth >= depth) continue
 
-    // 中心节点用传入的 centerData（文件夹页在这里补过「直属子项」出链）；
+    // 中心节点用传入的 centerData（文件夹页在这里补过「后代内容文件」出链）；
     // 其余节点仍从 linkIndex 取。若这里直接用 linkIndex.get，会丢掉补出来的出链。
     const currentData = current === centerSlug ? centerData : linkIndex.get(current)
     const currentIsVirtual = !currentData

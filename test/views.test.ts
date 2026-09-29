@@ -44,7 +44,7 @@ describe("graph view selection", () => {
     }
   });
 
-  it("uses all direct real files as folder cores, never the folder anchor or neighbors", () => {
+  it("uses all descendant real files as folder cores, never folder indexes or neighbors", () => {
     const nodes = ["项目/", "项目/a", "项目/b", "项目/子目录/c", "人员/p"].map((id) => ({
       id,
       isCore: false,
@@ -61,7 +61,7 @@ describe("graph view selection", () => {
       sharedAggregation: true,
       hasRegionRules: false,
     });
-    expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["项目/a"]);
+    expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["项目/a", "项目/子目录/c"]);
   });
 
   it("preserves the global degree threshold", () => {
@@ -95,7 +95,7 @@ describe("graph view selection", () => {
     expect([...focusNodeIds("local", nodes, "项目/a")]).toEqual(["项目/a"]);
   });
 
-  it("marks only direct real files in a folder graph", () => {
+  it("marks descendant real files in a folder graph", () => {
     const nodes = [
       { id: "项目/index" },
       { id: "项目/a" },
@@ -105,6 +105,7 @@ describe("graph view selection", () => {
     ];
     expect([...focusNodeIds("folder", nodes, "项目/index", [], (id) => id !== "项目/b")]).toEqual([
       "项目/a",
+      "项目/子目录/c",
     ]);
   });
 

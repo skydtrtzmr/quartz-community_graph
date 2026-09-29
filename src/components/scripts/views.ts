@@ -51,14 +51,14 @@ function selectLocal<N extends CoreCandidate>(selection: CoreSelection<N>) {
 }
 
 function selectFolder<N extends CoreCandidate>(selection: CoreSelection<N>) {
-  const directFiles = focusNodeIds(
+  const folderFiles = focusNodeIds(
     "folder",
     selection.nodes,
     selection.slug,
     [],
     (id) => !!selection.contentData.get(id)?.filePath,
   );
-  for (const node of selection.nodes) node.isCore = directFiles.has(node.id);
+  for (const node of selection.nodes) node.isCore = folderFiles.has(node.id);
 }
 
 function selectDimension<N extends CoreCandidate>(selection: CoreSelection<N>) {
@@ -152,7 +152,7 @@ export function focusNodeIds<N extends CoreCandidate>(
     }
     if (view === "folder" && node.id.startsWith(folderPrefix)) {
       const rest = node.id.slice(folderPrefix.length);
-      if (rest !== "" && rest !== "index" && !rest.includes("/")) focus.add(node.id);
+      if (rest !== "" && rest !== "index" && !rest.endsWith("/") && !rest.endsWith("/index")) focus.add(node.id);
     }
     if (view === "dimension" && matchedIds.has(node.id)) focus.add(node.id);
   }

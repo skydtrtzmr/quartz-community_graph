@@ -118,7 +118,8 @@
         "showTags": true,
         "removeTags": [],
         "focusOnHover": false,
-        "enableRadial": false
+        "enableRadial": false,
+        "showAggregatedNodeLinks": false
       },
       "globalGraph": {
         "enabled": true,
