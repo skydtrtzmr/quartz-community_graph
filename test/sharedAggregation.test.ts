@@ -114,6 +114,14 @@ describe("shared local aggregation", () => {
     expect(() => groupShared([note("未知/a")], artifact, identity)).toThrow("missing context");
   });
 
+  it("keeps generated tag nodes visible without looking up a tags context", () => {
+    const tag = note("tags/urgent");
+    const tasks = [note("任务/a", { status: "完成" }), note("任务/b", { status: "完成" })];
+    const result = groupShared([tag, ...tasks], artifact, identity);
+    expect(result.leaves).toContain(tag);
+    expect(result.groups[0].members).toEqual(tasks);
+  });
+
   it("rejects bad protocols instead of silently using legacy options", () => {
     expect(readSharedAggregation(artifact)).toBe(artifact);
     // minGroupSize 允许 1（每个取值都成组），0 仍非法
