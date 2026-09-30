@@ -410,6 +410,10 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         while (slash >= 0) {
           const parent = affected.slice(0, slash + 1) as SimpleSlug
           if (linkIndex.has(parent)) affectedSlugs.add(parent)
+          // ⚠️ 以 "/" 开头的 slug（最典型是根页面 "/"）必须在这里收尾：
+          // 否则 next = lastIndexOf("/", -1) 会被钳成 fromIndex=0，又命中位置 0 的 "/"，
+          // slash 永远停在 0 → 死循环（100% CPU、无日志输出）。
+          if (slash === 0) break
           slash = affected.lastIndexOf("/", slash - 1)
         }
       }

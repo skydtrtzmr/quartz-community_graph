@@ -16,7 +16,11 @@ type WriteOptions = {
 export const write = async ({ ctx, slug, ext, content }: WriteOptions): Promise<FilePath> => {
   const pathToPage = joinSegments(ctx.argv.output, slug + ext) as FilePath
   const dir = path.dirname(pathToPage)
+  const size = typeof content === "string" ? Buffer.byteLength(content) : content.length
+  const t0 = Date.now()
+  console.log(`[write] start ${slug}${ext} (${(size / 1048576).toFixed(2)} MB)`)
   await fs.mkdir(dir, { recursive: true })
   await fs.writeFile(pathToPage, content)
+  console.log(`[write] done  ${slug}${ext} in ${Date.now() - t0}ms`)
   return pathToPage
 }
