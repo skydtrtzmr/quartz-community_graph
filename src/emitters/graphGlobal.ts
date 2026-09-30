@@ -176,7 +176,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     const coreNodeLimit = opts.coreNodeLimit ?? 100
     const coreMinLinks = resolveCoreMinLinks(opts.coreMinLinks, coreNodeFilter.length > 0)
     const startCollapsed = opts.startCollapsed ?? true
-    const filterOrphans = coreMinLinks > 0
+    const excludeUnlinkedNodes = coreMinLinks > 0
     const filterNonCoreNodes = opts.filterNonCoreNodes ?? true
     const showTags = opts.showTags ?? true
     const removeTags: string[] = opts.removeTags ?? []
@@ -285,10 +285,10 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     const nonOrphanLinks = allLinks.filter(
       (l) => nonOrphanNodeIds.has(l.source) && nonOrphanNodeIds.has(l.target),
     )
-    const effectiveNodeIds = filterOrphans ? nonOrphanNodeIds : neighbourhood
-    const effectiveLinks = filterOrphans ? nonOrphanLinks : allLinks
+    const effectiveNodeIds = excludeUnlinkedNodes ? nonOrphanNodeIds : neighbourhood
+    const effectiveLinks = excludeUnlinkedNodes ? nonOrphanLinks : allLinks
     console.log(
-      `  [Step 4] ${filterOrphans ? "Non-orphan" : "Unfiltered"}: ${effectiveNodeIds.size} nodes, ${effectiveLinks.length} links`,
+      `  [Step 4] ${excludeUnlinkedNodes ? "Non-orphan" : "Unfiltered"}: ${effectiveNodeIds.size} nodes, ${effectiveLinks.length} links`,
     )
 
     // ===== Step 5: 核心节点标记 =====

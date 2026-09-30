@@ -29,8 +29,6 @@ export interface D3Config {
   showArrows?: boolean;
   /** 是否在节点上显示徽标 */
   showBadge?: boolean;
-  /** 是否过滤孤儿节点 */
-  filterOrphans?: boolean;
   /** 首屏是否折叠（全局图谱） */
   startCollapsed?: boolean;
   /** 节点中心数字显示下限（仅全局图谱核心节点） */
@@ -77,7 +75,7 @@ export interface GraphOptions {
   localGraph?: Partial<GraphUserConfig>;
   /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
   folderGraph?: Pick<Partial<GraphUserConfig>, "linkDistance">;
-  globalGraph?: Omit<Partial<GraphUserConfig>, "filterOrphans">;
+  globalGraph?: Partial<GraphUserConfig>;
 }
 
 const defaultOptions: GraphOptions = {
@@ -101,7 +99,6 @@ const defaultOptions: GraphOptions = {
     enableRadial: false,
     showArrows: true,
     showBadge: false,
-    filterOrphans: false,
     startCollapsed: false,
     showAggregatedNodeLinks: false,
     countLabelMaxDisplay: 120,

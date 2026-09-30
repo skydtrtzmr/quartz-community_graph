@@ -482,7 +482,6 @@ function main() {
       enableRadial,
       showArrows = true,
       showBadge = false,
-      filterOrphans: rawFilterOrphans = false,
       startCollapsed = false,
       countLabelMaxDisplay = 99,
       aggregation,
@@ -497,9 +496,8 @@ function main() {
       colorBy,
     } = JSON.parse(graph.dataset["cfg"]!) as D3Config
 
-    const filterOrphans = depth < 0
-      ? resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length) > 0
-      : rawFilterOrphans
+    const excludeUnlinkedGlobalNodes = depth < 0 &&
+      resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length) > 0
 
     // 全局图谱默认硬上限 100；局部图谱不设上限
     const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
@@ -1271,7 +1269,7 @@ function main() {
         ? focusNodeIds("folder", allNodes, slug, [], (id) => !!contentData.get(id as SimpleSlug)?.filePath)
         : new Set<string>()
       const nonOrphanNodes = allNodes.filter(
-        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id) || (graphView === "global" && !filterOrphans),
+        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id) || (graphView === "global" && !excludeUnlinkedGlobalNodes),
       )
       const nonOrphanNodeIds = new Set(nonOrphanNodes.map((n) => n.id))
       const nonOrphanLinks = allLinks.filter(
@@ -1669,9 +1667,9 @@ function main() {
         )
       }
 
-      // [CONFIG] 根据 filterOrphans / startCollapsed 决定初始渲染的节点集合
-      const initialNodes = filterOrphans ? nonOrphanNodes : allNodes
-      const initialLinks = filterOrphans ? nonOrphanLinks : allLinks
+      // 全局图谱的连接门槛决定是否移除无边节点；局部/文件夹/维度图保留候选节点。
+      const initialNodes = excludeUnlinkedGlobalNodes ? nonOrphanNodes : allNodes
+      const initialLinks = excludeUnlinkedGlobalNodes ? nonOrphanLinks : allLinks
 
       if (graphView === "folder") {
         // 一级分区替代目录中心；未分组的直属文件保留，关联节点待展开时出现。
