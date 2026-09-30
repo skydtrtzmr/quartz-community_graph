@@ -35,6 +35,7 @@ import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
 import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
+import { resolveCoreMinLinks } from "../../util/coreMinLinks"
 import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
@@ -172,7 +173,6 @@ interface GlobalGraphPrecomputed {
     coreNodeFilter?: any
     coreNodeLimit?: number
     startCollapsed?: boolean
-    filterOrphans?: boolean
     filterNonCoreNodes?: boolean
     showTags?: boolean
     removeTags?: string[]
@@ -482,19 +482,24 @@ function main() {
       enableRadial,
       showArrows = true,
       showBadge = false,
-      filterOrphans = false,
+      filterOrphans: rawFilterOrphans = false,
       startCollapsed = false,
       countLabelMaxDisplay = 99,
       aggregation,
       showAggregatedNodeLinks = false,
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
+      coreMinLinks,
       coreAggregationMaxLevels,
       regionRules,
       expandCoresOnRegionOpen = true,
       filterNonCoreNodes = true,
       colorBy,
     } = JSON.parse(graph.dataset["cfg"]!) as D3Config
+
+    const filterOrphans = depth < 0
+      ? resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length) > 0
+      : rawFilterOrphans
 
     // 全局图谱默认硬上限 100；局部图谱不设上限
     const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
@@ -1266,7 +1271,7 @@ function main() {
         ? focusNodeIds("folder", allNodes, slug, [], (id) => !!contentData.get(id as SimpleSlug)?.filePath)
         : new Set<string>()
       const nonOrphanNodes = allNodes.filter(
-        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id),
+        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id) || (graphView === "global" && !filterOrphans),
       )
       const nonOrphanNodeIds = new Set(nonOrphanNodes.map((n) => n.id))
       const nonOrphanLinks = allLinks.filter(
@@ -1283,6 +1288,7 @@ function main() {
         sharedAggregation: !!sharedAggregation,
         coreNodeFilter,
         coreNodeLimit,
+        coreMinLinks,
         hasRegionRules: !!(regionRules && regionRules.length > 0),
       })
 

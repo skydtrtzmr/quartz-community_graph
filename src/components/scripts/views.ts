@@ -1,5 +1,6 @@
 import type { ContentDetails } from "../../util/contentIndex";
 import { matchCoreNodeFilter, type CoreNodeFilterConfig } from "../../util/aggregation";
+import { qualifiesAsGlobalCore, resolveCoreMinLinks } from "../../util/coreMinLinks";
 
 export type GraphView = "global" | "local" | "folder" | "dimension";
 
@@ -19,6 +20,7 @@ export interface CoreSelection<N extends CoreCandidate> {
   sharedAggregation: boolean;
   coreNodeFilter?: CoreNodeFilterConfig;
   coreNodeLimit?: number;
+  coreMinLinks?: number;
   hasRegionRules: boolean;
 }
 
@@ -66,15 +68,17 @@ function selectDimension<N extends CoreCandidate>(selection: CoreSelection<N>) {
 }
 
 function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
-  const { nodes, nodeLinkCount, contentData, coreNodeFilter, coreNodeLimit, hasRegionRules } =
+  const { nodes, nodeLinkCount, contentData, coreNodeFilter, coreNodeLimit, coreMinLinks, hasRegionRules } =
     selection;
+  const minLinks = resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length);
   if (coreNodeFilter && coreNodeFilter.length > 0) {
     console.log("[Graph] coreNodeFilter 规则:", JSON.stringify(coreNodeFilter));
     let matchedCount = 0;
     const matchSamples: { id: string; folderKey: string; matched: boolean }[] = [];
     for (const node of nodes) {
       const details = contentData.get(node.id);
-      node.isCore = matchCoreNodeFilter(node.id, details?.frontmatter, coreNodeFilter);
+      node.isCore = matchCoreNodeFilter(node.id, details?.frontmatter, coreNodeFilter) &&
+        qualifiesAsGlobalCore(node.id, nodeLinkCount.get(node.id) ?? 0, minLinks, !!details);
       if (node.isCore) matchedCount++;
       const parts = node.id.split("/");
       const folderKey = parts.length > 1 ? parts[0] : "/";
@@ -94,7 +98,9 @@ function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
       Object.fromEntries([...folderStats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20)),
     );
   } else {
-    selectByDegree(nodes, nodeLinkCount, 2);
+    for (const node of nodes) {
+      node.isCore = qualifiesAsGlobalCore(node.id, nodeLinkCount.get(node.id) ?? 0, minLinks, contentData.has(node.id));
+    }
   }
 
   // Keep the existing global-only limit, including the region-rule exception.

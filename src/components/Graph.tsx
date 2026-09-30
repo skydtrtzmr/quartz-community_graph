@@ -45,6 +45,8 @@ export interface D3Config {
   coreNodeFilter?: CoreNodeFilterConfig;
   /** 核心节点数量硬上限（未配置 regionRules 时生效） */
   coreNodeLimit?: number;
+  /** 全局核心节点的最少连接数；0 纳入孤立内容节点 */
+  coreMinLinks?: number;
   /** 全局核心集合的字段聚合上限，不计文件夹层（默认 2） */
   coreAggregationMaxLevels?: number;
   /** 大区聚合规则（配置后首屏显示大区节点，点击展开） */
@@ -62,7 +64,7 @@ export interface D3Config {
  * （`aggregation` / `regionRules` / `coreNodeFilter` 由 `resolveGraphGrouping` 从 `folders` 合成）。
  */
 export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter"> & {
-  /** 主体文件夹白名单（全局图谱首屏大区；空 / 缺省 = 全部文件夹） */
+  /** 主体文件夹白名单；空 / 缺省时由 coreMinLinks 从全部目录选择核心内容节点 */
   folders?: string[];
 };
 
@@ -75,7 +77,7 @@ export interface GraphOptions {
   localGraph?: Partial<GraphUserConfig>;
   /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
   folderGraph?: Pick<Partial<GraphUserConfig>, "linkDistance">;
-  globalGraph?: Partial<GraphUserConfig>;
+  globalGraph?: Omit<Partial<GraphUserConfig>, "filterOrphans">;
 }
 
 const defaultOptions: GraphOptions = {

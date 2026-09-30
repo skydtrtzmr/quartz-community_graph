@@ -12,12 +12,12 @@
  *   保持「文件夹大区 → 共享字段链 → 主体节点 → 邻居文件夹分组」层级，
  *   即使只选了一个主体文件夹也保留这一层（否则首屏会一次铺出上百个单节点）。
  * - `coreNodeFilter`：主体文件夹白名单 → 「这些文件夹下的节点即核心」。
- *   未配白名单时留空，运行时回落到「连接数阈值」的启发式。
+ *   未配白名单时留空，运行时按 coreMinLinks 选择核心内容节点。
  */
 import type { AggregationRule, CoreNodeFilterConfig } from "./aggregation"
 
 export interface GraphGroupingInput {
-  /** 主体文件夹白名单（YAML: `globalGraph.folders`）；空 / 缺省 = 全部文件夹 */
+  /** 主体文件夹白名单（YAML: `globalGraph.folders`）；空 / 缺省时按 coreMinLinks 从全部目录选择 */
   folders?: string[]
   /** 文件夹层数（默认 1）；通常传 `configuration.aggregation.root.depth` 以与聚合保持一致 */
   folderDepth?: number

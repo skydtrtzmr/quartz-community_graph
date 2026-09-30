@@ -36,20 +36,20 @@ export interface GraphProOptions {
     /** 是否生成 graph/global/graphGlobal.json（默认 true） */
     enabled?: boolean
     /**
-     * 主体文件夹白名单（全局图谱首屏的大区 = 这些文件夹；空 / 缺省 = 全部文件夹）。
+     * 主体文件夹白名单；空 / 缺省时由 coreMinLinks 从全部目录选择核心内容节点。
      * 邻居分组统一复用 `configuration.aggregation`，无该配置时按文件夹兜底。
      */
     folders?: string[]
     /** 核心节点数量硬上限（未配主体白名单时生效） */
     coreNodeLimit?: number
+    /** 全局核心节点的最少连接数；0 纳入孤立内容节点。白名单默认 1，空白名单默认 3 */
+    coreMinLinks?: number
     /** 核心集合最多使用共享字段链的前 N 项（正整数，默认 2；不计文件夹层） */
     coreAggregationMaxLevels?: number
     /** 首屏是否只显示核心节点（默认 true） */
     startCollapsed?: boolean
     /** 大区展开后是否同时展开内部核心节点（默认 false；false 时核心节点保持收起） */
     expandCoresOnRegionOpen?: boolean
-    /** 是否过滤孤儿节点（默认 true） */
-    filterOrphans?: boolean
     /** 是否过滤非核心节点（默认 true） */
     filterNonCoreNodes?: boolean
     /** 按 frontmatter 字段为节点分配分类颜色，例如 `type` */
@@ -85,7 +85,6 @@ export const DEFAULT_GLOBAL_GRAPH_CFG: Record<string, unknown> = {
   enableRadial: true,
   showAggregatedNodeLinks: false,
   showArrows: true,
-  filterOrphans: true,
   startCollapsed: true,
   countLabelMin: 7,
   countLabelMaxDisplay: 120,

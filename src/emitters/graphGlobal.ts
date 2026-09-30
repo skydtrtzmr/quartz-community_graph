@@ -38,6 +38,7 @@ import {
 } from "../util/aggregation"
 import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation"
 import { resolveGraphGrouping } from "../util/graphGrouping"
+import { qualifiesAsGlobalCore, resolveCoreMinLinks } from "../util/coreMinLinks"
 
 // ===== 预计算 JSON 结构定义 =====
 
@@ -73,8 +74,8 @@ interface GlobalGraphPrecomputed {
     regionRules?: AggregationRule[]
     coreNodeFilter?: CoreNodeFilterConfig
     coreNodeLimit?: number
+    coreMinLinks?: number
     startCollapsed?: boolean
-    filterOrphans?: boolean
     filterNonCoreNodes?: boolean
     showTags?: boolean
     removeTags?: string[]
@@ -103,18 +104,18 @@ interface GlobalGraphPrecomputed {
 interface Options {
   enabled?: boolean
   /**
-   * 主体文件夹白名单（YAML: `options.globalGraph.folders`）；空 / 缺省 = 全部文件夹。
+   * 主体文件夹白名单（YAML: `options.globalGraph.folders`）；空 / 缺省时由 coreMinLinks 从全部目录选择核心内容节点。
    * 大区 / 邻居分组 / 核心节点均由 `resolveGraphGrouping` 从它 + `configuration.aggregation` 合成。
    */
   folders?: string[]
   /** 核心节点数量硬上限 */
   coreNodeLimit?: number
+  /** 全局核心节点的最少连接数；0 纳入孤立内容节点 */
+  coreMinLinks?: number
   /** 核心集合只使用共享规则链前 N 项（默认 2） */
   coreAggregationMaxLevels?: number
   /** 全局图谱是否默认收起 */
   startCollapsed?: boolean
-  /** 是否过滤孤儿节点 */
-  filterOrphans?: boolean
   /** 是否过滤非核心节点 */
   filterNonCoreNodes?: boolean
   /** 是否显示标签 */
@@ -127,7 +128,6 @@ const defaultOptions: Options = {
   enabled: true,
   coreNodeLimit: 100,
   startCollapsed: true,
-  filterOrphans: true,
   filterNonCoreNodes: true,
   showTags: true,
   removeTags: [],
@@ -174,8 +174,9 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       folderDepth: shared?.root?.depth,
     })
     const coreNodeLimit = opts.coreNodeLimit ?? 100
+    const coreMinLinks = resolveCoreMinLinks(opts.coreMinLinks, coreNodeFilter.length > 0)
     const startCollapsed = opts.startCollapsed ?? true
-    const filterOrphans = opts.filterOrphans ?? true
+    const filterOrphans = coreMinLinks > 0
     const filterNonCoreNodes = opts.filterNonCoreNodes ?? true
     const showTags = opts.showTags ?? true
     const removeTags: string[] = opts.removeTags ?? []
@@ -295,13 +296,14 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     if (coreNodeFilter && coreNodeFilter.length > 0) {
       for (const nodeId of effectiveNodeIds) {
         const details = contentData.get(nodeId as SimpleSlug)
-        if (matchCoreNodeFilter(nodeId, details?.frontmatter, coreNodeFilter)) {
+        if (matchCoreNodeFilter(nodeId, details?.frontmatter, coreNodeFilter) &&
+            qualifiesAsGlobalCore(nodeId, nodeLinkCount.get(nodeId) ?? 0, coreMinLinks, !!details)) {
           coreNodeIdSet.add(nodeId)
         }
       }
     } else {
       for (const nodeId of effectiveNodeIds) {
-        if ((nodeLinkCount.get(nodeId) ?? 0) > 2) {
+        if (qualifiesAsGlobalCore(nodeId, nodeLinkCount.get(nodeId) ?? 0, coreMinLinks, contentData.has(nodeId as SimpleSlug))) {
           coreNodeIdSet.add(nodeId)
         }
       }
@@ -658,8 +660,8 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
         regionRules: regionRules.length > 0 ? regionRules : undefined,
         coreNodeFilter: coreNodeFilter.length > 0 ? coreNodeFilter : undefined,
         coreNodeLimit,
+        coreMinLinks,
         startCollapsed,
-        filterOrphans,
         filterNonCoreNodes,
         showTags,
         removeTags: removeTags.length > 0 ? removeTags : undefined,

@@ -4,6 +4,8 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 ## 共享聚合规则
 
+`options.globalGraph.coreMinLinks` 是全局图谱唯一的连接数门槛：`0` 纳入无连接内容文件，正数筛选核心节点并排除零连接节点。未配置时，目录白名单非空默认 `1`，白名单为空默认 `3`，保持已有站点行为。标签节点、文件夹索引页和无内容数据的虚拟节点不参与。全局图谱不再接受 `filterOrphans`；局部图谱仍可独立使用它。文件夹页图谱不使用此阈值。
+
 全局图谱：首屏仍为核心文件夹分区；分区内的核心集合按 `aggregation.json.resolved[目录]`
 取前 N 项逐级聚合。`options.globalGraph.coreAggregationMaxLevels` 为正整数，默认 2，
 不计首屏文件夹层；在分组前截取，即使前两项缺值也不会补用第三项。
