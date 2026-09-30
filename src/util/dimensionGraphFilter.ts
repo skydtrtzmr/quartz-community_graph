@@ -13,7 +13,7 @@
  * 避免出现「已经按范围筛掉了，却还在图上当上下文」的误导。
  */
 
-import { isFolderIndexSlug } from "./aggregation"
+import { isFolderIndexSlug, UNCLASSIFIED_KEY } from "./aggregation"
 
 export interface DimensionEdge {
   source: string
@@ -96,13 +96,14 @@ export function parseFilter(raw: string | undefined | null): DimensionFilterEntr
   return entries
 }
 
-/** 取 frontmatter 字段的第一个值（与 aggregation-pro 的 `firstValue` 口径一致：数组取首个） */
+/** 与聚合分组相同：数组取第一个有值元素，wikilink 取显示文本。 */
 export function firstValue(value: unknown): string | null {
-  if (value == null) return null
-  if (Array.isArray(value)) return value.length > 0 ? String(value[0]) : null
-  if (typeof value === "string") return value
-  if (typeof value === "number" || typeof value === "boolean") return String(value)
-  return null
+  const present = (item: unknown) => item !== undefined && item !== null && item !== ""
+  const found = Array.isArray(value) ? value.find(present) : present(value) ? value : undefined
+  if (found === undefined) return null
+  const text = String(found)
+  const match = text.match(/^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]*))?\]\]$/)
+  return match ? (match[2] ?? "").trim() || (match[1] ?? "").trim() : text
 }
 
 /** 节点详情是否满足所有 filter 约束（缺 frontmatter / 字段值不匹配 → 不满足） */
@@ -110,7 +111,7 @@ function matchesFilter(details: unknown, entries: DimensionFilterEntry[]): boole
   if (entries.length === 0) return true
   const fm = (details as { frontmatter?: Record<string, unknown> } | undefined)?.frontmatter
   for (const entry of entries) {
-    if (firstValue(fm?.[entry.field]) !== entry.value) return false
+    if ((firstValue(fm?.[entry.field]) ?? UNCLASSIFIED_KEY) !== entry.value) return false
   }
   return true
 }

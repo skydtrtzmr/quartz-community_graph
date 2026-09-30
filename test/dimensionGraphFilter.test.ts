@@ -55,6 +55,23 @@ describe("scope 语义（前缀匹配）", () => {
 })
 
 describe("filterDimensionGraph", () => {
+  it("未分类祖先筛选把缺字段实体留在图中", () => {
+    const sample: DimensionGraphLike = {
+      nodes: {
+        "人员/a": { frontmatter: { type: "工程师" } },
+        "人员/b": { frontmatter: { 阶段: "入职" } },
+      },
+      edges: [],
+      matched: [
+        { slug: "人员/a", scope: "人员" },
+        { slug: "人员/b", scope: "人员" },
+      ],
+    }
+    const result = filterDimensionGraph(sample, { scope: "人员", filter: "阶段:未分类" })
+    expect(result.matched.map((item) => item.slug)).toEqual(["人员/a"])
+    expect(Object.keys(result.nodes)).toEqual(["人员/a"])
+  })
+
   it("无参数时原样返回（不复制）", () => {
     const result = filterDimensionGraph(graph, {})
     expect(result.nodes).toBe(graph.nodes)
