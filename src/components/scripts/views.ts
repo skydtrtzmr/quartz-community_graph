@@ -22,6 +22,8 @@ export interface CoreSelection<N extends CoreCandidate> {
   coreNodeLimit?: number;
   coreMinLinks?: number;
   hasRegionRules: boolean;
+  selectedCoreIds?: Set<string>;
+  domainLinkCounts?: Map<string, number>;
 }
 
 /** The data attribute is explicit for folder pages; depth still decides global mode. */
@@ -70,7 +72,8 @@ function selectDimension<N extends CoreCandidate>(selection: CoreSelection<N>) {
 function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
   const { nodes, nodeLinkCount, contentData, coreNodeFilter, coreNodeLimit, coreMinLinks, hasRegionRules } =
     selection;
-  const minLinks = resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length);
+  const minLinks = resolveCoreMinLinks(coreMinLinks);
+  const counts = selection.domainLinkCounts ?? nodeLinkCount;
   if (coreNodeFilter && coreNodeFilter.length > 0) {
     console.log("[Graph] coreNodeFilter 规则:", JSON.stringify(coreNodeFilter));
     let matchedCount = 0;
@@ -78,7 +81,7 @@ function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
     for (const node of nodes) {
       const details = contentData.get(node.id);
       node.isCore = matchCoreNodeFilter(node.id, details?.frontmatter, coreNodeFilter) &&
-        qualifiesAsGlobalCore(node.id, nodeLinkCount.get(node.id) ?? 0, minLinks, !!details);
+        qualifiesAsGlobalCore(node.id, counts.get(node.id) ?? 0, minLinks, !!details);
       if (node.isCore) matchedCount++;
       const parts = node.id.split("/");
       const folderKey = parts.length > 1 ? parts[0] : "/";
@@ -99,7 +102,7 @@ function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
     );
   } else {
     for (const node of nodes) {
-      node.isCore = qualifiesAsGlobalCore(node.id, nodeLinkCount.get(node.id) ?? 0, minLinks, contentData.has(node.id));
+      node.isCore = qualifiesAsGlobalCore(node.id, counts.get(node.id) ?? 0, minLinks, contentData.has(node.id));
     }
   }
 
@@ -118,6 +121,10 @@ function selectGlobal<N extends CoreCandidate>(selection: CoreSelection<N>) {
 
 /** Stage 1: move existing core classification without changing any view's membership. */
 export function selectCoreNodes<N extends CoreCandidate>(selection: CoreSelection<N>): void {
+  if (selection.selectedCoreIds && (selection.view === "folder" || selection.view === "dimension")) {
+    for (const node of selection.nodes) node.isCore = selection.selectedCoreIds.has(node.id);
+    return;
+  }
   switch (selection.view) {
     case "global":
       selectGlobal(selection);

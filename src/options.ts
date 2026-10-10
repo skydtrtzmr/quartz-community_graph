@@ -18,6 +18,8 @@ export interface GraphProOptions {
     precomputeLocal?: boolean
     /** 局部图谱展开深度（默认 1） */
     localDepth?: number
+    /** 全局、文件夹、维度值图谱的核心最少真实连接数，默认 0 */
+    coreMinLinks?: number
   }
 
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */
@@ -42,8 +44,6 @@ export interface GraphProOptions {
     folders?: string[]
     /** 核心节点数量硬上限（未配主体白名单时生效） */
     coreNodeLimit?: number
-    /** 全局核心节点的最少连接数；0 纳入孤立内容节点。白名单默认 1，空白名单默认 3 */
-    coreMinLinks?: number
     /** 核心集合最多使用共享字段链的前 N 项（正整数，默认 2；不计文件夹层） */
     coreAggregationMaxLevels?: number
     /** 首屏是否只显示核心节点（默认 true） */

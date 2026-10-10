@@ -102,6 +102,7 @@
     "defaultEnabled": false,
     "defaultOptions": {
       "graph": {
+        "coreMinLinks": 0,
         "precomputeLocal": true,
         "localDepth": 1
       },
@@ -139,7 +140,6 @@
         "showAggregatedNodeLinks": false,
         "coreNodeLimit": 100,
         "startCollapsed": true,
-        "filterOrphans": true,
         "filterNonCoreNodes": true
       }
     },

@@ -64,8 +64,8 @@ describe("graph view selection", () => {
     expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["项目/a", "项目/子目录/c"]);
   });
 
-  it("preserves the global degree threshold", () => {
-    expect(coreIds("global", false)).toEqual(["项目/b"]);
+  it("defaults shared threshold to zero", () => {
+    expect(coreIds("global", false)).toEqual(["项目/a", "项目/b"]);
   });
 
   it("keeps popular synthetic tags out of folder regions without a whitelist", () => {
@@ -82,7 +82,7 @@ describe("graph view selection", () => {
     expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/a"]);
   });
 
-  it("uses the configured minimum only for global cores without a whitelist", () => {
+  it("uses the configured minimum for global cores without a whitelist", () => {
     const nodes = ["project/one", "project/two", "tags/popular", "project/index", "virtual/missing"].map((id) => ({ id, isCore: false }));
     const base = {
       view: "global" as const,
@@ -102,13 +102,13 @@ describe("graph view selection", () => {
     selectCoreNodes({ ...base, coreMinLinks: 2 });
     expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/two"]);
     selectCoreNodes(base);
-    expect(nodes.filter((node) => node.isCore)).toEqual([]);
+    expect(nodes.filter((node) => node.isCore).map(node => node.id)).toEqual(["project/one", "project/two"]);
     selectCoreNodes({ ...base, coreMinLinks: 0 });
     expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/one", "project/two"]);
     expect(() => selectCoreNodes({ ...base, coreMinLinks: -1 })).toThrow("non-negative integer");
   });
 
-  it("uses zero to include isolated whitelisted content and defaults a whitelist to one", () => {
+  it("defaults to zero with or without a folder whitelist", () => {
     const nodes = ["project/isolated", "project/linked", "person/linked"].map((id) => ({ id, isCore: false }));
     const selection = {
       view: "global" as const,
@@ -121,7 +121,7 @@ describe("graph view selection", () => {
       hasRegionRules: true,
     };
     selectCoreNodes(selection);
-    expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/linked"]);
+    expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/isolated", "project/linked"]);
     selectCoreNodes({ ...selection, coreMinLinks: 0 });
     expect(nodes.filter((node) => node.isCore).map((node) => node.id)).toEqual(["project/isolated", "project/linked"]);
   });

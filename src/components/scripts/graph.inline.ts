@@ -35,10 +35,10 @@ import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
 import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
-import { resolveCoreMinLinks } from "../../util/coreMinLinks"
+import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
 import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { expansionSeedAngle } from "./expansionLayout"
-import { filterDimensionGraph } from "../../util/dimensionGraphFilter"
+import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import { selectSharedRules } from "../../util/dimensionSelection"
 import { showOriginalCenterLink } from "../../util/aggregatedLinks"
@@ -496,8 +496,7 @@ function main() {
       colorBy,
     } = JSON.parse(graph.dataset["cfg"]!) as D3Config
 
-    const excludeUnlinkedGlobalNodes = depth < 0 &&
-      resolveCoreMinLinks(coreMinLinks, !!coreNodeFilter?.length) > 0
+
 
     // 全局图谱默认硬上限 100；局部图谱不设上限
     const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
@@ -509,6 +508,30 @@ function main() {
     // 维度值页：容器自带产物地址（graph/dimensions/**），并由脚本按 URL 参数裁剪
     const localGraphUrl = graph.dataset["localGraphUrl"] || undefined
     const isDimensionGraph = graph.dataset["dimensionGraph"] !== undefined
+    let selection: GraphSelection | undefined
+    if (depth < 0 || isDimensionGraph || graph.dataset.graphView === "folder") {
+      const response = await fetch(`${basePath ? `/${basePath}` : ""}/graph/selection.json`)
+      if (!response.ok) throw new Error(`[Graph] selection.json: HTTP ${response.status}; rebuild domain`)
+      selection = await response.json() as GraphSelection
+      coreMinLinks = resolveCoreMinLinks(selection.coreMinLinks)
+    }
+    const excludeUnlinkedGlobalNodes = depth < 0 && resolveCoreMinLinks(coreMinLinks) > 0
+
+
+    const dimensionScope = isDimensionGraph
+      ? new URLSearchParams(window.location.search).get("scope") ?? ""
+      : ""
+    const dimensionValue = isDimensionGraph
+      ? document.querySelector<HTMLElement>("[data-dimension-value]")
+      : null
+    const dimensionUsedFields = new Set<string>()
+    if (isDimensionGraph) {
+      const field = dimensionValue?.dataset.field
+      if (field) dimensionUsedFields.add(field)
+      for (const entry of parseFilter(new URLSearchParams(window.location.search).get("filter"))) {
+        dimensionUsedFields.add(entry.field)
+      }
+    }
 
     // Stage 2: local graph consumes the shared artifact, including subsequent expansion.
     // The dataset only enables loading; rule values come exclusively from the JSON.
@@ -522,8 +545,21 @@ function main() {
           artifact,
           (folder) => readDimensionOrder(folder, basePath),
           dimensionMaxLevels(),
-          currentFolder(fullSlug),
+          isDimensionGraph ? dimensionScope : currentFolder(fullSlug),
         )
+        if (isDimensionGraph) {
+          // The current value and its ancestor filters have already been consumed by the list.
+          // Only the remaining configured dimensions can partition this graph.
+          sharedAggregation = {
+            ...sharedAggregation,
+            resolved: Object.fromEntries(
+              Object.entries(sharedAggregation.resolved).map(([folder, rules]) => [
+                folder,
+                rules.filter((rule) => rule.type !== "field" || !dimensionUsedFields.has(rule.field!)),
+              ]),
+            ),
+          }
+        }
       } catch (error) {
         if (!checkGeneration(generation)) return () => {}
         graph.textContent = "聚合规则加载失败，请检查 aggregation.json 并重新构建。"
@@ -1257,6 +1293,28 @@ function main() {
         allLinks = allLinks.filter((link) => link.source.id !== slug && link.target.id !== slug)
       }
 
+
+      let selectedCoreIds: Set<string> | undefined
+      if ((graphView === "folder" || graphView === "dimension") && selection) {
+        const candidates = focusNodeIds(graphView, allNodes, slug, localGraphData?.matched ?? [],
+          id => !!contentData.get(id as SimpleSlug)?.filePath)
+        const scoped = selectScope(candidates, selection.linkCounts, selection.coreMinLinks,
+          allLinks.map(link => ({ source: link.source.id, target: link.target.id })))
+        selectedCoreIds = scoped.coreIds
+        allNodes = allNodes.filter(node => scoped.retainedIds.has(node.id))
+        allLinks = allLinks.filter(link => scoped.retainedIds.has(link.source.id) && scoped.retainedIds.has(link.target.id))
+        graph.dataset.coreSelectedCount = String(scoped.coreIds.size)
+        graph.dataset.coreTotalCount = String(candidates.size)
+        const statusHost = graph.parentElement
+        let status = statusHost?.querySelector<HTMLElement>(".graph-selection-status")
+        if (!status && statusHost) {
+          status = document.createElement("div")
+          status.className = "graph-selection-status"
+          status.style.cssText = "font-size:.8rem;color:var(--gray);padding:.25rem 0"
+          statusHost.appendChild(status)
+        }
+        if (status) status.textContent = `图谱主体 ${scoped.coreIds.size} / ${candidates.size}（最少 ${selection.coreMinLinks} 个真实连接；列表保留全部文件）`
+      }
       // 连接数统计
       nodeLinkCount = new Map<string, number>()
       for (const l of allLinks) {
@@ -1269,7 +1327,7 @@ function main() {
         ? focusNodeIds("folder", allNodes, slug, [], (id) => !!contentData.get(id as SimpleSlug)?.filePath)
         : new Set<string>()
       const nonOrphanNodes = allNodes.filter(
-        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || folderCoreIds.has(n.id) || (graphView === "global" && !excludeUnlinkedGlobalNodes),
+        (n) => (nodeLinkCount.get(n.id) ?? 0) > 0 || (selectedCoreIds ?? folderCoreIds).has(n.id) || (graphView === "global" && !excludeUnlinkedGlobalNodes),
       )
       const nonOrphanNodeIds = new Set(nonOrphanNodes.map((n) => n.id))
       const nonOrphanLinks = allLinks.filter(
@@ -1280,6 +1338,8 @@ function main() {
       selectCoreNodes({
         view: graphView,
         nodes: nonOrphanNodes,
+        selectedCoreIds,
+        domainLinkCounts: selection ? new Map(Object.entries(selection.linkCounts)) : undefined,
         nodeLinkCount,
         contentData,
         slug,
@@ -1569,16 +1629,16 @@ function main() {
         }
       >()
       coreToRegionMap = new Map<SimpleSlug, SimpleSlug>()
-      let folderFirstScreenNodes: NodeData[] | null = null
+      let scopedFirstScreenNodes: NodeData[] | null = null
 
-      if (graphView === "folder") {
-        const folderCores = nonOrphanNodes.filter((n) => n.isCore && !n.isAggregation)
+      if (graphView === "folder" || graphView === "dimension") {
+        const scopedCores = nonOrphanNodes.filter((n) => n.isCore && !n.isAggregation)
         const firstLevel = sharedAggregation
-          ? groupShared(folderCores, sharedAggregation, describeAggregationNode)
-          : { groups: [], leaves: folderCores }
-        folderFirstScreenNodes = [...firstLevel.leaves]
+          ? groupShared(scopedCores, sharedAggregation, describeAggregationNode)
+          : { groups: [], leaves: scopedCores }
+        scopedFirstScreenNodes = [...firstLevel.leaves]
         for (const group of firstLevel.groups) {
-          const regionId = `region:folder:${JSON.stringify([slug, group.rule, group.key])}` as SimpleSlug
+          const regionId = `region:${graphView}:${JSON.stringify([slug, group.rule, group.key])}` as SimpleSlug
           const regionNode: NodeData = {
             id: regionId,
             text: group.rule.type === "field"
@@ -1599,7 +1659,7 @@ function main() {
             currentField: group.rule.type === "folder" ? "📁" : group.rule.field,
           })
           for (const member of group.members) coreToRegionMap.set(member.id, regionId)
-          folderFirstScreenNodes.push(regionNode)
+          scopedFirstScreenNodes.push(regionNode)
         }
       }
 
@@ -1671,9 +1731,9 @@ function main() {
       const initialNodes = excludeUnlinkedGlobalNodes ? nonOrphanNodes : allNodes
       const initialLinks = excludeUnlinkedGlobalNodes ? nonOrphanLinks : allLinks
 
-      if (graphView === "folder") {
-        // 一级分区替代目录中心；未分组的直属文件保留，关联节点待展开时出现。
-        const visibleNodes = folderFirstScreenNodes ?? []
+      if (graphView === "folder" || graphView === "dimension") {
+        // 有后续维度时首屏显示分区；末级值页保留命中实体原貌。
+        const visibleNodes = scopedFirstScreenNodes ?? []
         const visibleIds = new Set(visibleNodes.map((node) => node.id))
         graphData = {
           nodes: visibleNodes,
@@ -2528,8 +2588,8 @@ function main() {
         const regionInfo = regionNodeInfoMap.get(nodeId)
         const remainingRules = regionInfo?.remainingRules ?? []
 
-        if ((graphView === "folder" || isGlobalGraph) && sharedAggregation) {
-          // 全局/文件夹分区内的核心集合均沿共享字段链展开。
+        if ((graphView === "folder" || graphView === "dimension" || isGlobalGraph) && sharedAggregation) {
+          // 全局、文件夹和值页分区内的核心集合均沿剩余字段链展开。
           const regionNode = graphData.nodes.find((node) => node.id === nodeId)!
           const children = createSharedGroups(regionNode, childCores, remainingRules)
           const visible = new Set([...graphData.nodes, ...children].map((node) => node.id))
@@ -3081,7 +3141,7 @@ function main() {
             }
             // 再处理聚合节点自身的展开状态
             if (expandedNodeIds.has(aggId)) {
-              if (sharedAggregation || graphView === "folder") collapseNode(aggId)
+              if (sharedAggregation || graphView === "folder" || graphView === "dimension") collapseNode(aggId)
               else {
                 expandedNodeIds.delete(aggId)
                 expandedAggChildren.delete(aggId)
@@ -3772,7 +3832,7 @@ function main() {
       container.dataset["basepath"] = document.body?.dataset?.basepath ?? ""
       container.dataset["cfg"] = JSON.stringify(DIMENSION_GRAPH_DEFAULTS)
       container.dataset["precomputeDepth"] = "1"
-      container.dataset["sharedAggregation"] = "false"
+      container.dataset["sharedAggregation"] = "true"
       if (overrideUrl) container.dataset["localGraphUrl"] = overrideUrl
       console.log("[Graph] 维度值页图谱容器已就绪:", overrideUrl)
     }
@@ -3962,7 +4022,7 @@ function main() {
         // 数据源切换为维度子图：renderGraph 据此走「维度裁剪」路径（scope/context/filter 都从当前 URL 读）
         graphContainer.dataset["dimensionGraph"] = "true"
         graphContainer.dataset["localGraphUrl"] = url
-        graphContainer.dataset["sharedAggregation"] = "false"
+        graphContainer.dataset["sharedAggregation"] = "true"
         const cfg = JSON.parse(dimContainer.dataset.cfg ?? "{}") as D3Config
         graphContainer.dataset.cfg = JSON.stringify({
           ...cfg,

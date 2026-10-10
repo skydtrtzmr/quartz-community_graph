@@ -29,7 +29,7 @@ import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
 import { readFile } from "node:fs/promises"
 import { globalCoreRules, groupGlobalNeighbors, readSharedAggregation } from "../util/sharedAggregation"
-import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
+import type { ContentDetails } from "../util/contentIndex"
 import {
   UNCLASSIFIED_KEY,
   extractGroupKey,
@@ -174,9 +174,11 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       folderDepth: shared?.root?.depth,
     })
     const coreNodeLimit = opts.coreNodeLimit ?? 100
-    const coreMinLinks = resolveCoreMinLinks(opts.coreMinLinks, coreNodeFilter.length > 0)
+    const coreMinLinks = resolveCoreMinLinks(opts.coreMinLinks)
     const startCollapsed = opts.startCollapsed ?? true
     const excludeUnlinkedNodes = coreMinLinks > 0
+    const selection = JSON.parse(await readFile(joinSegments(ctx.argv.output, "graph", "selection.json"), "utf8")) as import("../util/coreMinLinks").GraphSelection
+    const domainCounts = selection.linkCounts
     const filterNonCoreNodes = opts.filterNonCoreNodes ?? true
     const showTags = opts.showTags ?? true
     const removeTags: string[] = opts.removeTags ?? []
@@ -297,13 +299,13 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       for (const nodeId of effectiveNodeIds) {
         const details = contentData.get(nodeId as SimpleSlug)
         if (matchCoreNodeFilter(nodeId, details?.frontmatter, coreNodeFilter) &&
-            qualifiesAsGlobalCore(nodeId, nodeLinkCount.get(nodeId) ?? 0, coreMinLinks, !!details)) {
+            qualifiesAsGlobalCore(nodeId, domainCounts[nodeId] ?? 0, coreMinLinks, !!details && Object.hasOwn(domainCounts, nodeId))) {
           coreNodeIdSet.add(nodeId)
         }
       }
     } else {
       for (const nodeId of effectiveNodeIds) {
-        if (qualifiesAsGlobalCore(nodeId, nodeLinkCount.get(nodeId) ?? 0, coreMinLinks, contentData.has(nodeId as SimpleSlug))) {
+        if (qualifiesAsGlobalCore(nodeId, domainCounts[nodeId] ?? 0, coreMinLinks, contentData.has(nodeId as SimpleSlug) && Object.hasOwn(domainCounts, nodeId))) {
           coreNodeIdSet.add(nodeId)
         }
       }
@@ -703,25 +705,10 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     name: "GraphGlobal",
 
     // 全量构建（reset 模式）：content 包含所有文件
-    async *emit(ctx, content) {
+    async *emit(ctx, _content) {
       if (opts.enabled === false) return
-      const contentData = new Map<SimpleSlug, ContentDetails>()
-      for (const [, file] of content) {
-        const data = file.data as unknown as IndexableFileData
-        const slug = data.slug
-        if (!slug) continue
-        if (data.text && data.text !== "") {
-          contentData.set(simplifySlug(slug), {
-            slug,
-            filePath: (data.relativePath ?? "") as never,
-            title: (data.frontmatter?.title as string) || slug,
-            links: data.links ?? [],
-            tags: (data.frontmatter?.tags as string[]) ?? [],
-            content: data.text ?? "",
-            frontmatter: data.frontmatter ?? {},
-          })
-        }
-      }
+      const fullIndex = JSON.parse(await readFile(joinSegments(ctx.argv.output, "static", "contentIndex.json"), "utf8")) as Record<string, ContentDetails>
+      const contentData = new Map<SimpleSlug, ContentDetails>(Object.entries(fullIndex).map(([id, value]) => [simplifySlug(id as FullSlug), value]))
       yield* computeAndEmit(ctx, contentData)
     },
 

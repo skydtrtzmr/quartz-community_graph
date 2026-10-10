@@ -61,7 +61,7 @@ export interface D3Config {
  * 用户可配的图谱参数：**不含**内部分组字段
  * （`aggregation` / `regionRules` / `coreNodeFilter` 由 `resolveGraphGrouping` 从 `folders` 合成）。
  */
-export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter"> & {
+export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter" | "coreMinLinks"> & {
   /** 主体文件夹白名单；空 / 缺省时由 coreMinLinks 从全部目录选择核心内容节点 */
   folders?: string[];
 };
@@ -71,6 +71,7 @@ export interface GraphOptions {
   graph?: {
     precomputeLocal?: boolean;
     localDepth?: number;
+    coreMinLinks?: number;
   };
   localGraph?: Partial<GraphUserConfig>;
   /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
@@ -116,6 +117,7 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
       ...defaultOptions.localGraph,
       aggregation: grouping.aggregation,
       ...userOpts?.localGraph,
+      coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0,
     };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
