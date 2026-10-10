@@ -20,6 +20,8 @@ export interface GraphProOptions {
     localDepth?: number
     /** 全局、文件夹、维度值图谱的核心最少真实连接数，默认 0 */
     coreMinLinks?: number
+    /** 当前图谱同时可见的真实文件节点上限，默认 500 */
+    maxVisibleNodes?: number
   }
 
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */

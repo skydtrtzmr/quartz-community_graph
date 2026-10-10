@@ -41,6 +41,7 @@ import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilt
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import { selectSharedRules } from "../../util/dimensionSelection"
 import { showOriginalCenterLink } from "../../util/aggregatedLinks"
+import { limitVisibleNodes, resolveMaxVisibleNodes } from "./visibleNodes"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -488,6 +489,7 @@ function main() {
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
       coreMinLinks,
+      maxVisibleNodes: rawMaxVisibleNodes,
       coreAggregationMaxLevels,
       regionRules,
       expandCoresOnRegionOpen = true,
@@ -664,6 +666,7 @@ function main() {
     const contentData = data!
     const isGlobalGraph = depth < 0
     const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
+    const maxVisibleNodes = resolveMaxVisibleNodes(rawMaxVisibleNodes)
 
     // ===== 前向声明：预计算路径和计算路径都会设置的变量 =====
     // 这些变量在展开/收起函数中被引用，必须提升到两个路径的公共作用域
@@ -707,6 +710,71 @@ function main() {
       )
     }
     let graphData: { nodes: NodeData[]; links: LinkData[] }
+    const listingHost = graphView === "dimension"
+      ? document.querySelector<HTMLElement>("[data-dimension-value][data-listing-sort]")
+      : document.querySelector<HTMLElement>("[data-unified-folder-list][data-listing-sort]")
+    let listingSort: { default?: any; folders?: Record<string, any> } = {}
+    try { listingSort = JSON.parse(listingHost?.dataset.listingSort ?? "{}") } catch { /* title fallback */ }
+    const listingFolder = graphView === "dimension" ? dimensionScope : currentFolder(fullSlug)
+    const listingRule = (() => {
+      let folder = listingFolder
+      while (folder) {
+        if (listingSort.folders?.[folder]) return listingSort.folders[folder]
+        folder = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : ""
+      }
+      return listingSort.default ?? { field: "title", order: "asc" }
+    })()
+    const sortField = typeof listingRule === "string" ? listingRule : listingRule.field || "title"
+    const sortDirection = typeof listingRule === "object" && listingRule.order === "desc" ? -1 : 1
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+    const sortValue = (node: NodeData) => {
+      const detail = contentData.get(node.id)
+      return sortField === "title" ? detail?.frontmatter?.title ?? detail?.title ?? node.text
+        : detail?.frontmatter?.[sortField]
+    }
+    const compareListingValue = (a: NodeData, b: NodeData) => {
+      const av = sortValue(a), bv = sortValue(b)
+      const missing = (value: unknown) => value === undefined || value === null || value === ""
+      if (missing(av) !== missing(bv)) return missing(av) ? 1 : -1
+      if (!missing(av)) {
+        const result = typeof av === "number" && typeof bv === "number" ? av - bv
+          : collator.compare(String(av), String(bv))
+        if (result) return result * sortDirection
+      }
+      return collator.compare(String(a.text ?? a.id), String(b.text ?? b.id))
+    }
+    const isVisibleFile = (node: NodeData) =>
+      !node.isRegion && !node.isAggregation &&
+      (selection ? Object.hasOwn(selection.linkCounts, node.id) : !!contentData.get(node.id)?.filePath)
+    const compareVisibleFiles = (a: NodeData, b: NodeData) =>
+      ((selection?.linkCounts[b.id] ?? nodeLinkCount.get(b.id) ?? 0) -
+        (selection?.linkCounts[a.id] ?? nodeLinkCount.get(a.id) ?? 0)) ||
+      compareListingValue(a, b) || collator.compare(String(a.id), String(b.id))
+    const limitNodes = (existing: NodeData[], proposed: NodeData[], links: LinkData[]) =>
+      graphView === "local"
+        ? { nodes: proposed, links, omitted: 0 }
+        : limitVisibleNodes(existing, proposed, links, maxVisibleNodes, isVisibleFile, compareVisibleFiles)
+    let expansionSummary: { shown: number; total: number } | undefined
+    const updateVisibleCount = () => {
+      if (graphView === "local") return
+      const visible = graphData.nodes.filter(isVisibleFile).length
+      const total = new Set(allNodes.filter(isVisibleFile).map((node) => node.id)).size
+      graph.dataset.visibleFileCount = String(visible)
+      graph.dataset.totalFileCount = String(total)
+      const host = graph.parentElement
+      let status = host?.querySelector<HTMLElement>(".graph-visible-status")
+      if (visible >= maxVisibleNodes && visible < total && host) {
+        if (!status) {
+          status = document.createElement("div")
+          status.className = "graph-visible-status"
+          status.style.cssText = "font-size:.8rem;color:var(--gray);padding:.25rem 0"
+          host.appendChild(status)
+        }
+        status.textContent = `图谱显示 ${visible} / ${total} 个文件` +
+          (expansionSummary && expansionSummary.shown < expansionSummary.total
+            ? `；本次展开 ${expansionSummary.shown} / ${expansionSummary.total}` : "")
+      } else status?.remove()
+    }
     let allLinks: LinkData[] = []
 
     // 聚合节点信息类型（expandNode 使用）
@@ -1849,6 +1917,12 @@ function main() {
       }
     } // end else (!globalPrecomputed)
 
+    if (graphView !== "local") {
+      const capped = limitNodes([], graphData.nodes, graphData.links)
+      graphData = { nodes: capped.nodes, links: capped.links }
+      updateVisibleCount()
+    }
+
     const focusIds = focusNodeIds(
       graphView,
       allNodes,
@@ -2777,6 +2851,12 @@ function main() {
           }
         }
 
+        const cappedRegion = limitNodes(graphData.nodes, nodesToAdd, linksToAdd)
+        expansionSummary = { shown: cappedRegion.nodes.filter(isVisibleFile).length,
+          total: cappedRegion.nodes.filter(isVisibleFile).length + cappedRegion.omitted }
+        nodesToAdd.splice(0, nodesToAdd.length, ...cappedRegion.nodes)
+        linksToAdd = cappedRegion.links
+        if (nodesToAdd.length === 0 && linksToAdd.length === 0) { updateVisibleCount(); return }
         expandedNodeIds.add(nodeId)
         if (nodesToAdd.length > 0 || linksToAdd.length > 0) {
           graphData.nodes.push(...nodesToAdd)
@@ -2806,6 +2886,7 @@ function main() {
           simulation.nodes(graphData.nodes)
           simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
           simulation.alpha(0.3).restart()
+          updateVisibleCount()
         }
 
         return
@@ -3002,7 +3083,12 @@ function main() {
         edgeLinksToAdd = nodeToEdgeLinks.get(nodeId) ?? []
       }
 
-      if (edgeNodesToAdd.length === 0) return
+      const cappedEdges = limitNodes(graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)
+      expansionSummary = { shown: cappedEdges.nodes.filter(isVisibleFile).length,
+        total: cappedEdges.nodes.filter(isVisibleFile).length + cappedEdges.omitted }
+      edgeNodesToAdd = cappedEdges.nodes
+      edgeLinksToAdd = cappedEdges.links
+      if (edgeNodesToAdd.length === 0) { updateVisibleCount(); return }
 
       const parentNode = graphData.nodes.find((n) => n.id === nodeId)
 
@@ -3108,10 +3194,16 @@ function main() {
       simulation.nodes(graphData.nodes)
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       simulation.alpha(isAggNode ? 0.12 : 0.3).restart()
+      updateVisibleCount()
     }
 
     function collapseNode(nodeId: SimpleSlug) {
       if (!expandedNodeIds.has(nodeId)) return
+      // A collapse destroys Pixi objects. Stop tweens that may still reference them
+      // before the next animation frame updates their positions or scale.
+      tweens.forEach((tween) => tween.stop())
+      tweens.clear()
+      expansionSummary = undefined
 
       const targetNode = graphData.nodes.find((n) => n.id === nodeId)
       // [REGION] 大区节点收起：移除内部核心节点及其所有邻接边缘节点
@@ -3216,6 +3308,7 @@ function main() {
         simulation.nodes(graphData.nodes)
         simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
         simulation.alpha(0.3).restart()
+        updateVisibleCount()
         return
       }
 
@@ -3403,6 +3496,7 @@ function main() {
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       // 收起时用较高 alpha 重新收敛，避免节点停留在展开时的远距离位置
       simulation.alpha(0.3).restart()
+      updateVisibleCount()
     }
 
     function toggleNodeExpansion(nodeId: SimpleSlug) {
@@ -3824,13 +3918,16 @@ function main() {
    */
   function prepareDimensionContainers() {
     const containers = document.querySelectorAll<HTMLElement>("[data-dimension-graph]")
+    const sharedGraphConfig = document.querySelector<HTMLElement>(".global-graph-container")?.dataset.globalCfg
+    const sharedMaxVisibleNodes = sharedGraphConfig
+      ? (JSON.parse(sharedGraphConfig) as D3Config).maxVisibleNodes : undefined
     for (const container of containers) {
       if (container.classList.contains("graph-container")) continue
       const overrideUrl =
         container.dataset["dimensionGraphUrl"] || container.dataset["localGraphUrl"]
       container.classList.add("graph-container")
       container.dataset["basepath"] = document.body?.dataset?.basepath ?? ""
-      container.dataset["cfg"] = JSON.stringify(DIMENSION_GRAPH_DEFAULTS)
+      container.dataset["cfg"] = JSON.stringify({ ...DIMENSION_GRAPH_DEFAULTS, maxVisibleNodes: sharedMaxVisibleNodes })
       container.dataset["precomputeDepth"] = "1"
       container.dataset["sharedAggregation"] = "true"
       if (overrideUrl) container.dataset["localGraphUrl"] = overrideUrl

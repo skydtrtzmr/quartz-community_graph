@@ -39,7 +39,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
       folderDepth: (cfg as unknown as { aggregation?: { root?: { depth?: number } } }).aggregation?.root
         ?.depth,
     });
-    const globalGraph = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...grouping, ...userGlobal, coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0 };
+    const globalGraph = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...grouping, ...userGlobal, coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0, maxVisibleNodes: userOpts?.graph?.maxVisibleNodes };
     // 传给 inline 脚本用于拼预计算 JSON 路径（与 Graph 组件同一套规则）
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed 需要；全局图谱 depth < 0 恒为预计算产物，这里与实际值保持一致
