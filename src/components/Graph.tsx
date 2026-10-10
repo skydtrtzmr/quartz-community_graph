@@ -46,6 +46,8 @@ export interface D3Config {
   /** 全局核心节点的最少连接数；0 纳入孤立内容节点 */
   coreMinLinks?: number;
   maxVisibleNodes?: number;
+  /** 溢出节点分批加载的每批数量（「+N」占位节点点击一次加载的节点数，默认 100） */
+  loadBatchSize?: number;
   /** 全局核心集合的字段聚合上限，不计文件夹层（默认 2） */
   coreAggregationMaxLevels?: number;
   /** 大区聚合规则（配置后首屏显示大区节点，点击展开） */
@@ -74,6 +76,7 @@ export interface GraphOptions {
     localDepth?: number;
     coreMinLinks?: number;
     maxVisibleNodes?: number;
+    loadBatchSize?: number;
   };
   localGraph?: Partial<GraphUserConfig>;
   /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
@@ -121,6 +124,7 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
       ...userOpts?.localGraph,
       coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0,
       maxVisibleNodes: userOpts?.graph?.maxVisibleNodes,
+      loadBatchSize: userOpts?.graph?.loadBatchSize,
     };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
