@@ -2871,10 +2871,19 @@ function main() {
 
         const cappedRegion = limitNodes(graphData.nodes, nodesToAdd, linksToAdd)
         collectOverflow(cappedRegion, true)
+        // 先标记已展开（即使本批全部溢出、0 入图），否则二次点击不会走 collapse 分支
+        expandedNodeIds.add(nodeId)
         nodesToAdd.splice(0, nodesToAdd.length, ...cappedRegion.nodes)
         linksToAdd = cappedRegion.links
-        if (nodesToAdd.length === 0 && linksToAdd.length === 0) { updateVisibleCount(); return }
-        expandedNodeIds.add(nodeId)
+        if (nodesToAdd.length === 0 && linksToAdd.length === 0) {
+          // 成员已全部折入「+N」队列：收起时同样要从队列剔除
+          const ids = new Set<string>()
+          const info = regionNodeInfoMap.get(nodeId)
+          if (info) for (const m of info.childCores) ids.add(m.id)
+          purgeOverflow(ids)
+          updateVisibleCount()
+          return
+        }
         if (nodesToAdd.length > 0 || linksToAdd.length > 0) {
           graphData.nodes.push(...nodesToAdd)
           graphData.links.push(...linksToAdd)
@@ -3102,9 +3111,17 @@ function main() {
 
       const cappedEdges = limitNodes(graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)
       collectOverflow(cappedEdges, true)
+      // 先标记已展开（即使本批全部溢出、0 入图），保证二次点击能走 collapse 分支
+      expandedNodeIds.add(nodeId)
       edgeNodesToAdd = cappedEdges.nodes
       edgeLinksToAdd = cappedEdges.links
-      if (edgeNodesToAdd.length === 0) { updateVisibleCount(); return }
+      if (edgeNodesToAdd.length === 0) {
+        const ids = new Set<string>()
+        for (const e of cappedEdges.overflow) ids.add(String(e.id))
+        purgeOverflow(ids)
+        updateVisibleCount()
+        return
+      }
 
       const parentNode = graphData.nodes.find((n) => n.id === nodeId)
 
@@ -3219,7 +3236,6 @@ function main() {
       // before the next animation frame updates their positions or scale.
       tweens.forEach((tween) => tween.stop())
       tweens.clear()
-      expansionSummary = undefined
 
       const targetNode = graphData.nodes.find((n) => n.id === nodeId)
       // [REGION] 大区节点收起：移除内部核心节点及其所有邻接边缘节点
@@ -3321,6 +3337,10 @@ function main() {
         }
 
         expandedNodeIds.delete(nodeId)
+        // 收起时把该分区尚未加载的溢出成员一并移出「+N」队列
+        const regionOverflowIds = new Set<string>()
+        for (const m of targetNode.regionChildIds ?? []) regionOverflowIds.add(String(m))
+        purgeOverflow(regionOverflowIds)
         simulation.nodes(graphData.nodes)
         simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
         simulation.alpha(0.3).restart()
@@ -3477,6 +3497,10 @@ function main() {
       }
       expandedNodeIds.delete(nodeId)
       expandedAggChildren.delete(nodeId)
+      // 收起时把该节点尚未加载的溢出成员一并移出「+N」队列
+      const overflowMemberIds = new Set<string>()
+      for (const e of edgeNodesToRemove) overflowMemberIds.add(String(e.id))
+      purgeOverflow(overflowMemberIds)
       const nodeData = graphData.nodes.find((n) => n.id === nodeId)
       if (nodeData) {
         nodeData.isExpanded = false
@@ -3597,6 +3621,18 @@ function main() {
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       simulation.alpha(0.3).restart()
       updateVisibleCount()
+    }
+
+    /** 收起节点时把其成员从「+N」队列中剔除，并同步占位节点计数 */
+    function purgeOverflow(memberIds: Set<string>): void {
+      if (overflowState.nodes.length === 0 || memberIds.size === 0) return
+      overflowState.nodes = overflowState.nodes.filter((n) => !memberIds.has(n.id))
+      overflowState.links = overflowState.links.filter((link) => {
+        const sid = String((link.source as NodeData).id ?? link.source)
+        const tid = String((link.target as NodeData).id ?? link.target)
+        return !memberIds.has(sid) && !memberIds.has(tid)
+      })
+      updateOverflowPlaceholder()
     }
 
     /** 队列清空时移除占位节点（归还对象池），否则同步其文案 */
