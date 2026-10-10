@@ -175,3 +175,12 @@ export function focusNodeIds<N extends CoreCandidate>(
 export function isExpandableLocalGroup(node: { id: string; isRegion?: boolean }): boolean {
   return node.isRegion === true || node.id.startsWith("agg:");
 }
+
+/** Collection graphs expand a core's neighbors before navigating to its document. */
+export function isExpandableCollectionNode(
+  view: GraphView,
+  node: { id: string; isRegion?: boolean; isCore?: boolean },
+): boolean {
+  return isExpandableLocalGroup(node) ||
+    ((view === "folder" || view === "dimension") && node.isCore === true);
+}

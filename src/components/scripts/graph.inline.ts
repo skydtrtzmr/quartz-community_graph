@@ -13,7 +13,6 @@ import {
   SimulationNodeDatum,
   SimulationLinkDatum,
   Simulation,
-  forceLink,
   zoomIdentity,
   select,
   drag,
@@ -34,9 +33,9 @@ import {
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
-import { focusNodeIds, graphViewOf, isExpandableLocalGroup, selectCoreNodes } from "./views"
+import { focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes } from "./views"
 import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
-import { createGraphSimulation, createAggAwareCollide, simulationSettings } from "./graphSimulation"
+import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
@@ -1313,7 +1312,7 @@ function main() {
           status.style.cssText = "font-size:.8rem;color:var(--gray);padding:.25rem 0"
           statusHost.appendChild(status)
         }
-        if (status) status.textContent = `图谱主体 ${scoped.coreIds.size} / ${candidates.size}（最少 ${selection.coreMinLinks} 个真实连接；列表保留全部文件）`
+        if (status) status.textContent = `图谱主体 ${scoped.coreIds.size} / ${candidates.size}`
       }
       // 连接数统计
       nodeLinkCount = new Map<string, number>()
@@ -1407,15 +1406,16 @@ function main() {
 
       const rules = aggregation ?? []
 
-      if (sharedAggregation && graphView !== "folder") {
+      if (sharedAggregation) {
         // A local view has one explicit center, irrespective of neighbors' link counts.
-        const centers = nonOrphanNodes.filter(n => isGlobalGraph ? n.isCore : n.id === slug)
+        const collectionGraph = graphView !== "local"
+        const centers = nonOrphanNodes.filter(n => collectionGraph ? n.isCore : n.id === slug)
         for (const center of centers) {
           const neighbors = new Set(nonOrphanLinks.flatMap(l =>
             l.source.id === center.id ? [l.target.id] : l.target.id === center.id ? [l.source.id] : []))
           neighbors.delete(center.id)
-          const members = nonOrphanNodes.filter(n => neighbors.has(n.id) && (!isGlobalGraph || !n.isCore) && !n.isAggregation)
-          const grouped = createSharedGroups(center, members, undefined, isGlobalGraph)
+          const members = nonOrphanNodes.filter(n => neighbors.has(n.id) && (!collectionGraph || !n.isCore) && !n.isAggregation)
+          const grouped = createSharedGroups(center, members, undefined, collectionGraph)
           nodeToEdgeNodes.set(center.id, grouped)
           nodeToEdgeLinks.set(center.id, [
             ...nonOrphanLinks.filter(l => (l.source.id === center.id || l.target.id === center.id) && grouped.some(n => n.id === (l.source.id === center.id ? l.target.id : l.source.id))),
@@ -2804,7 +2804,7 @@ function main() {
           }
 
           simulation.nodes(graphData.nodes)
-          simulation.force("link", forceLink(graphData.links).distance(linkDistance))
+          simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
           simulation.alpha(0.3).restart()
         }
 
@@ -3106,7 +3106,7 @@ function main() {
       renderLabels()
 
       simulation.nodes(graphData.nodes)
-      simulation.force("link", forceLink(graphData.links).distance(linkDistance))
+      simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       simulation.alpha(isAggNode ? 0.12 : 0.3).restart()
     }
 
@@ -3214,7 +3214,7 @@ function main() {
 
         expandedNodeIds.delete(nodeId)
         simulation.nodes(graphData.nodes)
-        simulation.force("link", forceLink(graphData.links).distance(linkDistance))
+        simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
         simulation.alpha(0.3).restart()
         return
       }
@@ -3400,7 +3400,7 @@ function main() {
       }
 
       simulation.nodes(graphData.nodes)
-      simulation.force("link", forceLink(graphData.links).distance(linkDistance))
+      simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       // 收起时用较高 alpha 重新收敛，避免节点停留在展开时的远距离位置
       simulation.alpha(0.3).restart()
     }
@@ -3477,8 +3477,8 @@ function main() {
                   toggleNodeExpansion(nodeId)
                 }
               } else {
-                // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转（与全局图谱同款去抖）
-                if (isExpandableLocalGroup(event.subject)) {
+                // 文件夹/值页核心和聚合节点单击展开，双击打开文件。
+                if (isExpandableCollectionNode(graphView, event.subject)) {
                   if (lastClickedNodeId === nodeId && now - lastClickTime < DOUBLE_CLICK_DELAY) {
                     lastClickedNodeId = null
                     lastClickTime = 0
@@ -3512,8 +3512,8 @@ function main() {
               }, DOUBLE_CLICK_DELAY)
             }
           } else {
-            // 局部图谱：普通节点直接跳转；聚合节点单击展开、双击跳转
-            if (isExpandableLocalGroup(node.simulationData)) {
+            // 文件夹/值页核心和聚合节点单击展开，双击打开文件。
+            if (isExpandableCollectionNode(graphView, node.simulationData)) {
               if (clickTimeout) {
                 clearTimeout(clickTimeout)
                 clickTimeout = null

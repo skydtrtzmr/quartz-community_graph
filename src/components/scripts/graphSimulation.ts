@@ -24,6 +24,31 @@ export function simulationSettings(view: GraphView) {
   };
 }
 
+type PartitionNode = SimulationNodeDatum & {
+  isRegion?: boolean;
+  isAggregation?: boolean;
+  isCore?: boolean;
+  aggChildCount?: number;
+  regionChildIds?: unknown[];
+};
+
+/** Give dimension partition spokes room without lengthening real content links. */
+export function createGraphLinkForce<N extends PartitionNode, L extends SimulationLinkDatum<N>>(
+  links: L[], view: GraphView, distance: number,
+) {
+  return forceLink<N, L>(links).distance((link) => {
+    if (view !== "dimension") return distance;
+    const source = link.source as N;
+    const target = link.target as N;
+    const group = source.isRegion || source.isAggregation ? source
+      : target.isRegion || target.isAggregation ? target : undefined;
+    const child = group === source ? target : source;
+    if (!group || !child.isCore || child.isRegion) return distance;
+    const count = group.regionChildIds?.length ?? group.aggChildCount ?? 1;
+    return Math.min(distance * 2.5, Math.max(distance * 1.35, 60 + Math.sqrt(count) * 12));
+  });
+}
+
 export function createGraphSimulation<
   N extends SimulationNodeDatum,
   L extends SimulationLinkDatum<N>,
@@ -40,7 +65,7 @@ export function createGraphSimulation<
   const simulation = forceSimulation<N>(nodes)
     .force("charge", forceManyBody<N>().strength(-100 * config.repelForce))
     .force("center", forceCenter<N>().strength(config.centerForce))
-    .force("link", forceLink<N, L>(links).distance(config.linkDistance))
+    .force("link", createGraphLinkForce<N, L>(links, view, config.linkDistance))
     .force("collide", collide)
     .alphaMin(settings.alphaMin)
     .alphaDecay(settings.alphaDecay)

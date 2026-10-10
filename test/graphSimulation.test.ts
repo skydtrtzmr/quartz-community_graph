@@ -1,12 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { forceLink, type SimulationNodeDatum } from "d3";
-import { createAggAwareCollide, createGraphSimulation, simulationSettings } from "../src/components/scripts/graphSimulation";
+import { createAggAwareCollide, createGraphSimulation, createGraphLinkForce, simulationSettings } from "../src/components/scripts/graphSimulation";
 
 interface Node extends SimulationNodeDatum {
   id: string;
   radius: number;
 }
 const config = { repelForce: 1.5, centerForce: 0.4, linkDistance: 150, enableRadial: true };
+
+it("lengthens dimension partition spokes, preserving ordinary links and other graph views", () => {
+  const partition = { isRegion: true, regionChildIds: Array(60) };
+  const core = { isCore: true };
+  const spoke = { source: partition, target: core };
+  const real = { source: core, target: { isCore: true } };
+  const dimension = createGraphLinkForce([spoke, real], "dimension", 70);
+  expect(dimension.distance()(spoke, 0, [spoke, real])).toBeGreaterThan(70);
+  expect(dimension.distance()(real, 1, [spoke, real])).toBe(70);
+  for (const view of ["folder", "global", "local"] as const) {
+    const force = createGraphLinkForce([spoke], view, 70);
+    expect(force.distance()(spoke, 0, [spoke])).toBe(70);
+  }
+});
 
 function fixture(view: "folder" | "global" | "local", options = config) {
   const regions: Node[] = Array.from({ length: 6 }, (_, i) => ({ id: `region:${i}`, radius: 25 }));

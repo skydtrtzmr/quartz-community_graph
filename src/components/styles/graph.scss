@@ -45,6 +45,11 @@
   height: 100%;
 }
 
+.folder-graph {
+  margin-top: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
 // 全局图谱按钮：与阅读模式按钮（.readermode，视口右上角固定定位）并列，
 // 因此沿用同一套定位参数，只把 right 向左错开一格。
 .graph-toggle {

@@ -3,6 +3,7 @@ import {
   focusNodeIds,
   graphViewOf,
   isExpandableLocalGroup,
+  isExpandableCollectionNode,
   selectCoreNodes,
   type GraphView,
 } from "../src/components/scripts/views";
@@ -187,6 +188,16 @@ describe("graph view selection", () => {
     expect(isExpandableLocalGroup({ id: "region:folder:阶段:计划", isRegion: true })).toBe(true);
     expect(isExpandableLocalGroup({ id: "agg:shared:计划" })).toBe(true);
     expect(isExpandableLocalGroup({ id: "项目/proj-00017" })).toBe(false);
+  });
+
+  it("expands folder and dimension cores while keeping local and edge files navigable", () => {
+    for (const view of ["folder", "dimension"] as const) {
+      expect(isExpandableCollectionNode(view, { id: "项目/a", isCore: true })).toBe(true);
+      expect(isExpandableCollectionNode(view, { id: "人员/p", isCore: false })).toBe(false);
+      expect(isExpandableCollectionNode(view, { id: "agg:shared:人员" })).toBe(true);
+      expect(isExpandableCollectionNode(view, { id: "region:scope", isRegion: true })).toBe(true);
+    }
+    expect(isExpandableCollectionNode("local", { id: "项目/a", isCore: true })).toBe(false);
   });
 
 });

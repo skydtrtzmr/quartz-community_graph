@@ -46,5 +46,6 @@ export default ((userOpts?: Partial<GraphOptions>) => {
     return inner(props)
   }
   FolderGraph.css = inner.css
+  ;(FolderGraph as typeof FolderGraph & { afterPageIntroduction?: boolean }).afterPageIntroduction = true
   return FolderGraph
 }) satisfies QuartzComponentConstructor<Partial<GraphOptions>>

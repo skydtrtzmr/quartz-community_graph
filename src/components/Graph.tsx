@@ -126,8 +126,8 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
     const precomputeDepth = userOpts?.graph?.localDepth ?? localGraph.depth ?? 1;
 
     return (
-      <div class={classNames(displayClass, "graph")}>
-        <h3>{i18n(cfg.locale ?? "en-US").components.graph.title}</h3>
+      <div class={classNames(displayClass, "graph", view === "folder" ? "folder-graph" : undefined)}>
+        {view !== "folder" && <h3>{i18n(cfg.locale ?? "en-US").components.graph.title}</h3>}
         <div class="graph-outer">
           <div
             class="graph-container"
