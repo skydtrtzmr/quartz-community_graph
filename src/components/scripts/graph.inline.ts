@@ -37,6 +37,7 @@ import { focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes 
 import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
 import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { indexGraphLinks } from "./graphLinkIndex"
+import { createOnDemandCache } from "./onDemandCache"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
@@ -67,6 +68,7 @@ if (initialized) {
 // ============ 类型定义 ============
 interface LocalGraphData {
   version: number
+  expansionMode?: "on-demand"
   center: SimpleSlug
   depth: number
   generatedAt: number
@@ -929,10 +931,17 @@ function main() {
       }
       return linkIndex!.incident(ids)
     }
+    const fallbackAggregation = { version: 1 as const, configHash: "fallback", minGroupSize: 2,
+      root: { type: "folder" as const, depth: 1 }, resolved: {} }
+    const groupChildrenCache = new Map<string, NodeData[]>()
     const createSharedGroups = (parent: NodeData, members: NodeData[], rules?: AggregationRule[], folderOnly = false) => {
+      const cacheKey = JSON.stringify([parent.id, folderOnly, rules])
+      const cached = groupChildrenCache.get(cacheKey)
+      if (cached) return cached
+      const artifact = sharedAggregation ?? fallbackAggregation
       const result = folderOnly
-        ? groupGlobalNeighbors(members, sharedAggregation, describeAggregationNode)
-        : groupShared(members, sharedAggregation, describeAggregationNode, rules)
+        ? groupGlobalNeighbors(members, artifact, describeAggregationNode)
+        : groupShared(members, artifact, describeAggregationNode, rules)
       const nodes = [...result.leaves]
       for (const group of result.groups) {
         const { rule, key, remainingRules } = group
@@ -943,8 +952,8 @@ function main() {
           aggChildCount: group.members.length,
           aggCollapsedRadius: Math.min(30, Math.max(16, 2 + Math.sqrt(group.members.length))),
         }
-        const memberIds = new Set(group.members.map(n => n.id))
-        const childLinks = incidentLinks(memberIds)
+        // Child edges are prepared only when this aggregation is opened.
+        const childLinks: LinkData[] = []
         const currentField = rule.type === "folder" ? "📁" : rule.field
         aggNodeInfoMap.set(id, {
           node,
@@ -962,8 +971,35 @@ function main() {
         aggToCoreMap.set(id, parent.id)
         nodes.push(node)
       }
+      groupChildrenCache.set(cacheKey, nodes)
       return nodes
     }
+
+    // 仅在主体节点真正展开时准备邻居，未展开主体不产生聚合对象和成员边副本。
+    const neighborPlans = createOnDemandCache((id: SimpleSlug) => {
+      const center = allNodes.find(node => node.id === id)!
+      const centerLinks = incidentLinks([id])
+      const ids = new Set(centerLinks.map(link => link.source.id === id ? link.target.id : link.source.id))
+      ids.delete(id)
+      const members = allNodes.filter(node => ids.has(node.id) &&
+        (graphView === "local" || !node.isCore) && !node.isAggregation && !node.isRegion)
+      const nodes = createSharedGroups(center, members, sharedAggregation ? undefined : aggregation ?? [], graphView !== "local" && !!sharedAggregation)
+      const visible = new Set(nodes.map(node => node.id))
+      const links: LinkData[] = [
+        ...centerLinks.filter(link => visible.has(link.source.id === id ? link.target.id : link.source.id)),
+        ...nodes.filter(node => node.isAggregation).map(node => ({ source: node, target: center })),
+      ]
+      nodeToEdgeNodes.set(id, nodes)
+      nodeToEdgeLinks.set(id, links)
+      return { nodes, links }
+    })
+    const prepareNeighbors = (id: SimpleSlug) => {
+      const plan = neighborPlans.get(id)
+      graph.dataset.neighborPlans = String(neighborPlans.size)
+      return plan
+    }
+    graph.dataset.expansionMode = "on-demand"
+    graph.dataset.neighborPlans = "0"
 
     // [GRAPH3] 预计算路径 vs 运行时计算路径
     if (globalPrecomputed) {
@@ -992,23 +1028,14 @@ function main() {
       }
 
       // 构建 allNodes（所有非孤立节点）
-      allNodes = Object.values(pc.nodeDetails).map((d) => ({
+      const coreIds = new Set(pc.coreNodeIds)
+      allNodes = Object.values(pc.nodeDetails).filter(d => !Object.hasOwn(pc.aggNodes, d.id)).map((d) => ({
         id: d.id as SimpleSlug,
         text: d.text,
         tags: d.tags,
-        isCore: (pc.coreNodeIds as string[]).includes(d.id),
+        isCore: coreIds.has(d.id),
       }))
       // 标记聚合/大区节点，并补充预计算路径缺失的运行时属性
-      for (const id of Object.keys(pc.aggNodes)) {
-        const n = allNodes.find((x) => x.id === id)
-        if (n) {
-          n.isCore = false
-          ;(n as any).isAggregation = true
-          const info = pc.aggNodes[id]
-          n.aggChildCount = info.childNodeIds.length
-          n.aggCollapsedRadius = Math.min(30, Math.max(16, 2 + Math.sqrt(info.childNodeIds.length)))
-        }
-      }
       for (const id of Object.keys(pc.regionNodes)) {
         const n = allNodes.find((x) => x.id === id)
         if (n) {
@@ -1036,77 +1063,7 @@ function main() {
       // 邻接映射（nodeToEdgeNodes / nodeToEdgeLinks）
       // 需要将 nodeId 转为 NodeData 引用
       const allNodeMap = new Map(allNodes.map((n) => [n.id, n]))
-      for (const [coreId, edgeIds] of Object.entries(pc.adjacency.nodeToEdgeNodeIds)) {
-        const coreNode = allNodeMap.get(coreId as SimpleSlug)
-        if (!coreNode) continue
-        const edgeNodes: NodeData[] = []
-        const edgeLinks: LinkData[] = []
-        const linkIndices = pc.adjacency.nodeToEdgeLinkIndices[coreId] ?? []
-        for (let i = 0; i < edgeIds.length; i++) {
-          const edgeNode = allNodeMap.get(edgeIds[i] as SimpleSlug)
-          if (!edgeNode) continue
-          edgeNodes.push(edgeNode)
-          if (pc.aggNodes[edgeNode.id]?.coreId === coreId) {
-            edgeLinks.push({ source: edgeNode, target: coreNode })
-          }
-        }
-        // A neighbor can have both incoming and outgoing edges; index lists are not
-        // one-to-one with node lists. Replay every real edge with its original direction.
-        for (const index of linkIndices) {
-          if (index < 0) continue
-          const cl = pc.allChildLinks[index]
-          if (!cl) continue
-          const source = allNodeMap.get(cl.source as SimpleSlug)
-          const target = allNodeMap.get(cl.target as SimpleSlug)
-          if (source && target) edgeLinks.push({ source, target, sourceField: cl.sourceField })
-        }
-        nodeToEdgeNodes.set(coreId as SimpleSlug, edgeNodes)
-        nodeToEdgeLinks.set(coreId as SimpleSlug, edgeLinks)
-      }
-
-      // aggNodeInfoMap
-      const aggInfoMap = new Map<SimpleSlug, any>()
-      for (const [aggId, info] of Object.entries(pc.aggNodes)) {
-        const childNodeData = (info.childNodeIds as string[])
-          .map((id) => allNodeMap.get(id as SimpleSlug))
-          .filter(Boolean) as NodeData[]
-        const childLinkData: LinkData[] = []
-        for (const idx of info.childLinkIndices) {
-          const cl = pc.allChildLinks[idx]
-          if (cl) {
-            const sn =
-              allNodeMap.get(cl.source as SimpleSlug) ||
-              childNodeData.find((n) => n.id === cl.source)
-            const tn =
-              allNodeMap.get(cl.target as SimpleSlug) ||
-              childNodeData.find((n) => n.id === cl.target)
-            if (sn && tn)
-              childLinkData.push({ source: sn, target: tn, sourceField: cl.sourceField })
-          }
-        }
-        const aggNode = allNodeMap.get(aggId as SimpleSlug)
-        aggInfoMap.set(aggId as SimpleSlug, {
-          node: aggNode,
-          coreId: info.coreId,
-          childNodes: childNodeData,
-          childLinks: childLinkData,
-          remainingRules: info.remainingRules,
-          currentField: info.currentField,
-          // 旧产物里没有 rule/scope：scope 由成员反推，rule 缺失时跳转逻辑回退用 currentField
-          rule: (info as { rule?: AggregationRule }).rule,
-          scope:
-            (info as { scope?: string }).scope ??
-            commonFolderOf(childNodeData.map((child) => String(child.id))),
-          groupKey: (info as { groupKey?: string }).groupKey ?? aggGroupKeyOf(aggId as string),
-        })
-        aggNodeToChildNodes.set(aggId as SimpleSlug, childNodeData)
-        aggNodeToChildLinks.set(aggId as SimpleSlug, childLinkData)
-        aggToCoreMap.set(aggId as SimpleSlug, info.coreId as SimpleSlug)
-      }
-      // 把预计算路径构建的聚合 info 写回**全局** map。
-      // ⚠️ 之前这里只写进了局部变量 `aggInfoMap` 且从未回填 → 全局图谱的聚合节点在
-      // `resolveAggregationTarget` 里 `aggNodeInfoMap.get()` 永远取不到 → 双击静默无跳转。
-      for (const [aggId, info] of aggInfoMap) aggNodeInfoMap.set(aggId, info)
+      // 邻居聚合与对象引用在展开主体时准备。
       // regionNodeInfoMap
       for (const [regionId, info] of Object.entries(pc.regionNodes)) {
         const childCores = (info.childCoreIds as string[])
@@ -1444,289 +1401,15 @@ function main() {
         hasRegionRules: !!(regionRules && regionRules.length > 0),
       })
 
-      const edgeNodes = nonOrphanNodes.filter((n) => !n.isCore)
-      const edgeNodeIds = new Set(edgeNodes.map((n) => n.id))
-
-      // 构建核心节点 → 边缘节点的映射（用于全局图谱展开/收起）
-      nodeToEdgeNodes = new Map<SimpleSlug, NodeData[]>()
-      nodeToEdgeLinks = new Map<SimpleSlug, LinkData[]>()
-      for (const l of nonOrphanLinks) {
-        const srcIsEdge = edgeNodeIds.has(l.source.id)
-        const tgtIsEdge = edgeNodeIds.has(l.target.id)
-        if (srcIsEdge && !tgtIsEdge) {
-          if (!nodeToEdgeNodes.has(l.target.id)) nodeToEdgeNodes.set(l.target.id, [])
-          if (!nodeToEdgeNodes.get(l.target.id)!.some((n) => n.id === l.source.id))
-            nodeToEdgeNodes.get(l.target.id)!.push(l.source)
-          if (!nodeToEdgeLinks.has(l.target.id)) nodeToEdgeLinks.set(l.target.id, [])
-          nodeToEdgeLinks.get(l.target.id)!.push(l)
-        } else if (!srcIsEdge && tgtIsEdge) {
-          if (!nodeToEdgeNodes.has(l.source.id)) nodeToEdgeNodes.set(l.source.id, [])
-          if (!nodeToEdgeNodes.get(l.source.id)!.some((n) => n.id === l.target.id))
-            nodeToEdgeNodes.get(l.source.id)!.push(l.target)
-          if (!nodeToEdgeLinks.has(l.source.id)) nodeToEdgeLinks.set(l.source.id, [])
-          nodeToEdgeLinks.get(l.source.id)!.push(l)
-        }
+      const edgeNodes = nonOrphanNodes.filter(node => !node.isCore)
+      for (const node of nonOrphanNodes) {
+        node.edgeNodeCount = nodeLinkCount.get(node.id) ?? 0
+        node.isExpanded = false
       }
-      for (const n of nonOrphanNodes) {
-        // [FIX] edgeNodeCount 改为统计所有邻居节点（核心↔核心 + 核心↔边缘），
-        // 以前只统计核心↔边缘（nodeToEdgeNodes），漏掉了核心节点之间的连接
-        n.edgeNodeCount = nodeLinkCount.get(n.id) ?? 0
-        n.isExpanded = false
-      }
-
-      // 计算每个边缘节点连接的核心节点数量（只算核心归属，不算边缘-边缘连接）
-      const edgeToCoreCount = new Map<string, number>()
-      for (const [, nodes] of nodeToEdgeNodes) {
-        for (const node of nodes) {
-          edgeToCoreCount.set(node.id, (edgeToCoreCount.get(node.id) ?? 0) + 1)
-        }
-      }
-
-      // 可聚合边缘节点：配置了大区规则时允许多归属节点聚合（每个核心节点独立聚合），否则仅单归属以避免全局视图混乱
-      const hasRegionRules = regionRules && regionRules.length > 0
-      const singleLinkEdgeNodes = edgeNodes.filter(
-        (n) => hasRegionRules || (edgeToCoreCount.get(n.id) ?? 0) === 1,
-      )
-      const singleLinkEdgeNodeIds = new Set(singleLinkEdgeNodes.map((n) => n.id))
-
-      // ===== 边缘节点聚合 =====
-      // 根据 aggregation 规则列表配置，将边缘节点按规则顺序分组为聚合节点
-      // 聚合节点作为核心节点的新"边缘邻居"替代散点边缘节点
-      // AggregationNodeInfo 接口已提升到公共作用域
-      aggNodeInfoMap = new Map<SimpleSlug, AggregationNodeInfo>()
-      aggNodeToChildNodes = new Map<SimpleSlug, NodeData[]>()
-      aggNodeToChildLinks = new Map<SimpleSlug, LinkData[]>()
-      // 聚合节点 ID → 所属核心节点 ID
-      aggToCoreMap = new Map<SimpleSlug, SimpleSlug>()
-
-      const rules = aggregation ?? []
-
-      if (sharedAggregation) {
-        // A local view has one explicit center, irrespective of neighbors' link counts.
-        const collectionGraph = graphView !== "local"
-        const centers = nonOrphanNodes.filter(n => collectionGraph ? n.isCore : n.id === slug)
-        const scopedLinkIndex = indexGraphLinks(nonOrphanLinks)
-        const nodeOrder = new Map(nonOrphanNodes.map((node, index) => [node.id, index]))
-        const scopedNodes = new Map(nonOrphanNodes.map(node => [node.id, node]))
-        const groupingStart = performance.now()
-        let sliceStart = groupingStart
-        for (const center of centers) {
-          // Let directory clicks and navigation run between bounded batches.
-          if (collectionGraph && performance.now() - sliceStart > 8) {
-            await new Promise<void>(resolve => setTimeout(resolve, 0))
-            if (!checkGeneration(generation)) return () => {}
-            sliceStart = performance.now()
-          }
-          const centerLinks = scopedLinkIndex.incident([center.id])
-          const neighbors = new Set(centerLinks.flatMap(l =>
-            l.source.id === center.id ? [l.target.id] : l.target.id === center.id ? [l.source.id] : []))
-          neighbors.delete(center.id)
-          const members = [...neighbors].map(id => scopedNodes.get(id)!)
-            .filter(n => (!collectionGraph || !n.isCore) && !n.isAggregation)
-            .sort((a, b) => nodeOrder.get(a.id)! - nodeOrder.get(b.id)!)
-          const grouped = createSharedGroups(center, members, undefined, collectionGraph)
-          const groupedIds = new Set(grouped.map(node => node.id))
-          nodeToEdgeNodes.set(center.id, grouped)
-          nodeToEdgeLinks.set(center.id, [
-            ...centerLinks.filter(l => groupedIds.has(l.source.id === center.id ? l.target.id : l.source.id)),
-            ...grouped.filter(n => n.isAggregation).map(n => ({ source: n, target: center })),
-          ])
-        }
-        console.debug(`[Graph] Neighbor grouping: ${centers.length} centers in ${(performance.now() - groupingStart).toFixed(1)}ms`)
+      // 文件页中心的邻居属于首屏；集合图谱此处不计算任何主体的邻居聚合。
+      if (graphView === "local" && allNodes.some(node => node.id === slug)) {
+        prepareNeighbors(slug)
         for (const info of aggNodeInfoMap.values()) nonOrphanNodes.push(info.node)
-      } else if (rules.length > 0 && graphView !== "folder") {
-        // 逐个核心节点，对其单链接叶节点按规则顺序聚合
-        for (const [coreId, coreEdgeNodes] of nodeToEdgeNodes.entries()) {
-          let leavesForNextRule = coreEdgeNodes.filter((n) => singleLinkEdgeNodeIds.has(n.id))
-          if (leavesForNextRule.length <= 1) continue // 叶节点太少，无需聚合
-
-          // 按规则列表顺序执行聚合
-          for (let ruleIdx = 0; ruleIdx < rules.length; ruleIdx++) {
-            const rule = rules[ruleIdx]
-            if (leavesForNextRule.length <= 1) break
-
-            const groupMap = new Map<string, NodeData[]>()
-            let hasValidValue = false
-
-            for (const leaf of leavesForNextRule) {
-              const nodeDetails = contentData.get(leaf.id)
-              let groupKey: string | null = null
-
-              if (nodeDetails) {
-                if (rule.type === "folder") {
-                  const parts = String(leaf.id).split("/")
-                  const depth = rule.depth ?? 1
-                  if (parts.length > 1) {
-                    const folderParts =
-                      depth > 1 ? parts.slice(0, Math.min(depth, parts.length - 1)) : [parts[0]]
-                    groupKey = folderParts.join("/")
-                  } else {
-                    groupKey = "/"
-                  }
-                } else if (rule.type === "field") {
-                  const field = rule.field ?? ""
-                  const rawValue = (nodeDetails as any).frontmatter?.[field]
-                  if (Array.isArray(rawValue)) {
-                    for (const v of rawValue) {
-                      if (v) {
-                        hasValidValue = true
-                        const key = String(v)
-                        const group = groupMap.get(key) ?? []
-                        group.push(leaf)
-                        groupMap.set(key, group)
-                      }
-                    }
-                    continue
-                  } else if (rawValue !== undefined && rawValue !== null) {
-                    hasValidValue = true
-                    groupKey = String(rawValue)
-                  }
-                }
-              }
-
-              if (rule.type !== "folder" && !groupKey) {
-                groupKey = UNCLASSIFIED_KEY
-              }
-              if (groupKey !== null) {
-                const group = groupMap.get(groupKey) ?? []
-                group.push(leaf)
-                groupMap.set(groupKey, group)
-              }
-            }
-
-            // folder 规则：单分组跳过；field/date 规则：没有有效值则跳过
-            if (rule.type === "folder") {
-              if (groupMap.size <= 1) continue
-            } else {
-              if (!hasValidValue || groupMap.size === 0) continue
-            }
-
-            // 为每个分组创建聚合节点
-            // folder 分组：优先用目录 index.md 的 frontmatter.title 作为显示名
-            const displayPrefix = rule.type === "folder" ? "📁 " : ""
-            for (const [groupKey, childNodes] of groupMap) {
-              if (rule.type === "folder") {
-                console.log(
-                  `[DBG-folderTitle] agg: graph=${isGlobalGraph ? "global" : "local"} ` +
-                    `groupKey="${groupKey}" normalized="${normalizeFolderKey(groupKey)}" ` +
-                    `hit="${folderTitleMap.get(normalizeFolderKey(groupKey)) ?? "∅"}" ` +
-                    `mapSize=${folderTitleMap.size} keys=[${[...folderTitleMap.keys()].join(",")}]`,
-                )
-              }
-              const displayKey =
-                rule.type === "folder"
-                  ? groupKey === "/"
-                    ? `📁 ${folderTitleMap.get("/") ?? "根目录"}`
-                    : `📁 ${folderDisplay(groupKey)}`
-                  : `${displayPrefix}${groupKey}`
-              const aggId =
-                `agg:${coreId}:${rule.type}:${rule.field ?? ""}:${groupKey}` as SimpleSlug
-              const collapsedR = Math.min(30, Math.max(16, 2 + Math.sqrt(childNodes.length)))
-              const aggNode: NodeData = {
-                id: aggId,
-                text: displayKey,
-                tags: [],
-                isCore: false,
-                isAggregation: true,
-                edgeNodeCount: 0,
-                aggCollapsedRadius: collapsedR,
-                aggChildCount: childNodes.length,
-              }
-
-              const childLinkSet: LinkData[] = []
-              const childLinkKeySet = new Set<string>()
-              for (const l of nonOrphanLinks) {
-                if (childNodes.some((cn) => cn.id === l.source.id || cn.id === l.target.id)) {
-                  const key = `${l.source.id}->${l.target.id}`
-                  if (!childLinkKeySet.has(key)) {
-                    childLinkKeySet.add(key)
-                    childLinkSet.push(l)
-                  }
-                }
-              }
-
-              aggToCoreMap.set(aggId, coreId)
-              aggNodeToChildNodes.set(aggId, childNodes)
-              aggNodeToChildLinks.set(aggId, childLinkSet)
-              aggNodeInfoMap.set(aggId, {
-                node: aggNode,
-                coreId,
-                childNodes,
-                childLinks: childLinkSet,
-                remainingRules: rules.slice(ruleIdx + 1),
-                currentField: rule.type === "folder" ? "📁" : (rule.field ?? rule.type),
-                rule,
-                scope: commonFolderOf(childNodes.map((child) => String(child.id))),
-                groupKey,
-              })
-              nonOrphanNodes.push(aggNode)
-            }
-
-            // 过滤掉已被当前规则聚合的叶子，供下一条规则使用
-            const currentAggedIds = new Set<SimpleSlug>()
-            for (const [, info] of aggNodeInfoMap.entries()) {
-              if (
-                info.coreId === coreId &&
-                info.currentField === (rule.type === "folder" ? "📁" : (rule.field ?? rule.type))
-              ) {
-                for (const cn of info.childNodes) currentAggedIds.add(cn.id)
-              }
-            }
-            leavesForNextRule = leavesForNextRule.filter((n) => !currentAggedIds.has(n.id))
-          }
-        }
-
-        // 更新 nodeToEdgeNodes / nodeToEdgeLinks：将原始叶节点替换为聚合节点
-        const aggregatedChildIds = new Set<SimpleSlug>()
-        for (const [coreId, oldEdgeNodes] of nodeToEdgeNodes.entries()) {
-          const newEdgeNodes: NodeData[] = []
-          const newEdgeLinks: LinkData[] = []
-          const replacedAggIds = new Set<SimpleSlug>()
-
-          for (const edgeNode of oldEdgeNodes) {
-            if (aggregatedChildIds.has(edgeNode.id)) continue // 已被其他核心节点的聚合消费
-
-            let foundAgg = false
-            for (const [aggId, info] of aggNodeInfoMap.entries()) {
-              if (info.coreId !== coreId) continue // 只处理属于当前核心节点的聚合
-              if (info.childNodes.some((cn) => cn.id === edgeNode.id)) {
-                if (!replacedAggIds.has(aggId)) {
-                  replacedAggIds.add(aggId)
-                  aggregatedChildIds.add(edgeNode.id)
-                  newEdgeNodes.push(info.node)
-                  newEdgeLinks.push({
-                    source: info.node,
-                    target: nonOrphanNodes.find((n) => n.id === coreId)!,
-                    sourceField: info.currentField,
-                  })
-                }
-                foundAgg = true
-                break
-              }
-            }
-            if (!foundAgg) {
-              newEdgeNodes.push(edgeNode)
-              for (const l of nodeToEdgeLinks.get(coreId) ?? []) {
-                if (l.source.id === edgeNode.id || l.target.id === edgeNode.id) {
-                  newEdgeLinks.push(l)
-                }
-              }
-            }
-          }
-
-          nodeToEdgeNodes.set(coreId, newEdgeNodes)
-          nodeToEdgeLinks.set(coreId, newEdgeLinks)
-        }
-
-        // 更新 edgeNodeCount（聚合节点只连接一个核心节点）
-        for (const [aggId] of aggNodeInfoMap) {
-          const aggNode = nonOrphanNodes.find((n) => n.id === aggId)
-          if (aggNode) aggNode.edgeNodeCount = 1
-        }
-
-        console.log(
-          `[Graph] 聚合完成：${aggNodeInfoMap.size} 个聚合节点，替代了 ${aggregatedChildIds.size} 个叶节点`,
-        )
       }
 
       // ===== 大区节点生成（全局图谱 + 配置了 regionRules）=====
@@ -2869,6 +2552,7 @@ function main() {
 
             // 仅当 expandCoresOnRegionOpen 为 true 时才同时展开核心节点的边缘节点
             if (expandCoresOnRegionOpen) {
+              prepareNeighbors(core.id)
               const coreEdgeNodes = nodeToEdgeNodes.get(core.id) ?? []
               for (const edge of coreEdgeNodes) {
                 if (!graphData.nodes.some((n) => n.id === edge.id)) {
@@ -2965,7 +2649,7 @@ function main() {
               while (aggToCoreMap.has(root)) root = aggToCoreMap.get(root)!
               return { root, childIds: new Set(info.childNodes.map(n => n.id)) }
             })
-          edgeLinksToAdd.push(...allLinks.filter(l => {
+          edgeLinksToAdd.push(...incidentLinks(expandedMembers).filter(l => {
             if (!visible.has(l.source.id) || !visible.has(l.target.id)) return false
             if (!expandedMembers.has(l.source.id) && !expandedMembers.has(l.target.id)) return false
             if (showAggregatedNodeLinks) return true
@@ -3117,7 +2801,7 @@ function main() {
           }
 
           // 添加叶子之间原有的连线，但过滤掉与所属核心节点的连线
-          const childLinks = aggNodeToChildLinks.get(nodeId) ?? []
+          const childLinks = incidentLinks(rawChildren.map(node => node.id))
           const rawChildIds = new Set(rawChildren.map(n => n.id))
           const visibleOrAddingIds = new Set([
             ...graphData.nodes.map((n) => n.id),
@@ -3132,8 +2816,9 @@ function main() {
           }
         }
       } else {
-        edgeNodesToAdd = nodeToEdgeNodes.get(nodeId) ?? []
-        edgeLinksToAdd = nodeToEdgeLinks.get(nodeId) ?? []
+        const plan = prepareNeighbors(nodeId)
+        edgeNodesToAdd = plan.nodes
+        edgeLinksToAdd = plan.links
       }
 
       const cappedEdges = limitNodes(graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)

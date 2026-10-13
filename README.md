@@ -4,6 +4,10 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 ## 共享聚合规则
 
+图谱只在初始化时准备首屏分组。展开大区、维度聚合或主体文件后，才计算该节点的下一层和相关边；收起再展开复用当前图谱实例内的结果，切换分类配置后重新计算。文件页局部图谱的中心邻居属于首屏，仍在初始化时准备。
+
+`graphGlobal.json` 的 `expansionMode: "on-demand"` 表示只预计算首屏大区，保留原始节点、边和邻接表，不预生成隐藏主体的邻居聚合。各类图谱目前仍加载完整数据 JSON，按需计算不等于分片下载；页面切换后会创建新的计算缓存。
+
 `options.graph.coreMinLinks` 统一筛选全局、文件夹页、维度值页图谱的核心文件，默认 `0`（包含孤立文件）。正整数表示业务域内最少真实文件连接数，不计目录、标签、维度聚合连线。低于门槛的文件仍可作为合格核心的直接邻居出现。普通文章局部图谱不受影响，列表及分类总数保留全量数据。构建产物 `graph/selection.json` 为三个视图提供相同的连接数。旧 `globalGraph.coreMinLinks` 请迁移到 `graph.coreMinLinks` 并重新构建；`filterOrphans` 已移除。
 
 全局图谱：首屏仍为核心文件夹分区；分区内的核心集合按 `aggregation.json.resolved[目录]`

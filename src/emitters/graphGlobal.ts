@@ -1,22 +1,6 @@
-// graphGlobal.ts - 全局图谱构建期预计算生成器
-// （自 v4 client/quartz/plugins/emitters/graphGlobal.tsx 移植，仅调整 import 与类型来源）
-//
-// 功能：在构建时执行全局图谱的完整计算流程，输出 graphGlobal.json，
-//       运行时直接加载预计算结果，跳过所有耗时计算。
-//
-// 预计算流程与运行时 graph3.inline.ts 中的逻辑完全一致：
-// 1. 虚拟节点计算
-// 2. 全局链接图构建
-// 3. 节点/链接去重 + 孤儿过滤
-// 4. 核心节点标记（coreNodeFilter / 连接数阈值 / 硬上限）
-// 5. 邻接映射构建（nodeToEdgeNodes / nodeToEdgeLinks）
-// 6. 边缘节点聚合（按 aggregation 规则）
-// 7. 大区节点生成（按 regionRules）
-// 8. 首屏 graphData 组装（region 模式 / 普通收起模式）
-//
-// 输出：graph/global/graphGlobal.json（一个文件，包含首屏 + 展开所需的全部数据）
-//
-// 注意：依赖 contentIndex.json 已生成（本插件的 order 必须大于 content-index-pro 的 50）。
+// 构建全局图谱首屏与原始关系索引。首屏之外的分层、邻居聚合在展开时计算。
+// 输出 graph/global/graphGlobal.json，保留原始节点/边以支持动态字段切换。
+// 依赖 contentIndex.json、aggregation.json 和 selection.json 已生成。
 
 import type {
   BuildCtx,
@@ -28,7 +12,7 @@ import { joinSegments } from "@quartz-community/types"
 import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
 import { readFile } from "node:fs/promises"
-import { globalCoreRules, groupGlobalNeighbors, readSharedAggregation } from "../util/sharedAggregation"
+import { globalCoreRules, readSharedAggregation } from "../util/sharedAggregation"
 import type { ContentDetails } from "../util/contentIndex"
 import {
   UNCLASSIFIED_KEY,
@@ -66,6 +50,7 @@ interface PreRegionNodeInfo {
 
 interface GlobalGraphPrecomputed {
   version: number
+  expansionMode: "on-demand"
   generatedAt: number
   /** 目录显示名映射（目录路径 → 目录 index.md 的 frontmatter.title） */
   folderTitles: Record<string, string>
@@ -349,190 +334,11 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       }
     }
 
-    // 边缘 → 核心计数
-    const edgeToCoreCount = new Map<string, number>()
-    for (const ids of Object.values(nodeToEdgeNodeIds)) {
-      for (const id of ids) {
-        edgeToCoreCount.set(id, (edgeToCoreCount.get(id) ?? 0) + 1)
-      }
-    }
-
-    const hasRegionRules = regionRules && regionRules.length > 0
-    const singleLinkEdgeNodeIds = new Set(
-      [...edgeNodeIdSet].filter((id) => hasRegionRules || (edgeToCoreCount.get(id) ?? 0) === 1),
-    )
-    console.log(`  [Step 6] Single-link edges: ${singleLinkEdgeNodeIds.size}`)
-
-    // ===== Step 7: 边缘节点聚合 =====
+    // 首屏之后的邻居聚合在浏览器展开时生成，只保留原始邻接关系。
     const aggNodes: Record<string, PreAggNodeInfo> = {}
     const aggToCore: Record<string, string> = {}
-    const childToAgg = new Map<string, string>()
-    const childLinksPool: Array<{ source: string; target: string; sourceField?: string }> = []
-
-    const rules = aggregation ?? []
-
-    if (shared) {
-      // Every core owns its own membership, including neighbors shared with other cores.
-      for (const [coreId, edgeIds] of Object.entries(nodeToEdgeNodeIds)) {
-        const grouped = groupGlobalNeighbors(edgeIds, shared, id => {
-          const details = contentData.get(id as SimpleSlug)
-          return { slug: details?.slug ?? id, frontmatter: details?.frontmatter }
-        })
-        for (const group of grouped.groups) {
-          const { rule, key, members: childIds, remainingRules } = group
-          const aggId = `agg:shared:${JSON.stringify([coreId, rule, key])}`
-          const childLinkIndices: number[] = []
-          const memberIds = new Set(childIds)
-          for (const link of effectiveLinks) {
-            if (memberIds.has(link.source) || memberIds.has(link.target)) {
-              childLinkIndices.push(childLinksPool.length)
-              childLinksPool.push(link)
-            }
-          }
-          aggNodes[aggId] = {
-            coreId, childNodeIds: childIds, childLinkIndices, remainingRules,
-            currentField: rule.type === "folder" ? "📁" : rule.field!,
-            displayText: rule.type === "folder" ? `📁 ${key === "/" ? folderTitles["/"] ?? "根目录" : folderDisplay(key)}` : key,
-          }
-          aggToCore[aggId] = coreId
-          for (const id of childIds) childToAgg.set(`${coreId}\t${id}`, aggId)
-        }
-      }
-    } else if (rules.length > 0) {
-      for (const [coreId, edgeNodeIds] of Object.entries(nodeToEdgeNodeIds)) {
-        let leavesForNextRule = edgeNodeIds.filter((id) => singleLinkEdgeNodeIds.has(id))
-        if (leavesForNextRule.length <= 1) continue
-
-        for (let ruleIdx = 0; ruleIdx < rules.length; ruleIdx++) {
-          const rule = rules[ruleIdx]
-          if (leavesForNextRule.length <= 1) break
-
-          // 检查规则有效性
-          if (rule.type !== "folder") {
-            if (
-              !isRuleEffective(
-                leavesForNextRule.map((id) => ({
-                  slug: id,
-                  frontmatter: contentData.get(id as SimpleSlug)?.frontmatter,
-                })),
-                rule,
-              )
-            )
-              continue
-          }
-
-          const groupMap = new Map<string, string[]>()
-          for (const leafId of leavesForNextRule) {
-            const details = contentData.get(leafId as SimpleSlug)
-            let groupKey: string | null = null
-            if (details) {
-              groupKey = extractGroupKey({ slug: leafId, frontmatter: details.frontmatter }, rule)
-            }
-            if (rule.type !== "folder" && groupKey === null) groupKey = UNCLASSIFIED_KEY
-            if (groupKey !== null) {
-              const group = groupMap.get(groupKey) ?? []
-              group.push(leafId)
-              groupMap.set(groupKey, group)
-            }
-          }
-
-          if (rule.type === "folder" && groupMap.size <= 1) continue
-          if (groupMap.size === 0) continue
-
-          const currentField = rule.type === "folder" ? "📁" : (rule.field ?? rule.type)
-          for (const [groupKey, childIds] of groupMap) {
-            const aggId = `agg:${coreId}:${rule.type}:${rule.field ?? ""}:${groupKey}`
-
-            const displayPrefix = rule.type === "folder" ? "📁 " : ""
-            const displayText =
-              rule.type === "folder"
-                ? groupKey === "/"
-                  ? `📁 ${folderTitles["/"] ?? "根目录"}`
-                  : `📁 ${folderDisplay(groupKey)}`
-                : `${displayPrefix}${groupKey}`
-
-            // 收集子节点间链接
-            const childLinkIndices: number[] = []
-            const childLinkKeySet = new Set<string>()
-            for (const l of effectiveLinks) {
-              if (childIds.includes(l.source) || childIds.includes(l.target)) {
-                const key = `${l.source}->${l.target}`
-                if (!childLinkKeySet.has(key)) {
-                  childLinkKeySet.add(key)
-                  childLinksPool.push({
-                    source: l.source,
-                    target: l.target,
-                    sourceField: l.sourceField,
-                  })
-                  childLinkIndices.push(childLinksPool.length - 1)
-                }
-              }
-            }
-
-            aggNodes[aggId] = {
-              coreId,
-              childNodeIds: childIds,
-              childLinkIndices,
-              remainingRules: rules.slice(ruleIdx + 1),
-              currentField,
-              displayText,
-            }
-            aggToCore[aggId] = coreId
-            for (const cid of childIds) childToAgg.set(`${coreId}\t${cid}`, aggId)
-          }
-
-          // 过滤已被聚合的叶子
-          const currentAggedIds = new Set<string>()
-          for (const [, info] of Object.entries(aggNodes)) {
-            if (info.coreId === coreId && info.currentField === currentField) {
-              for (const cid of info.childNodeIds) currentAggedIds.add(cid)
-            }
-          }
-          leavesForNextRule = leavesForNextRule.filter((id) => !currentAggedIds.has(id))
-        }
-      }
-    }
-    console.log(`  [Step 7] Agg nodes: ${Object.keys(aggNodes).length}`)
-
-    // 更新 nodeToEdgeNodeIds：聚合子节点替换为聚合节点
-    const updatedNodeToEdgeNodeIds: Record<string, string[]> = {}
-    const updatedNodeToEdgeLinkIndices: Record<string, number[]> = {}
-
-    for (const [coreId, oldEdgeIds] of Object.entries(nodeToEdgeNodeIds)) {
-      const newEdgeIds: string[] = []
-      const newLinkIndices: number[] = []
-      const replacedAggIds = new Set<string>()
-
-      for (const edgeId of oldEdgeIds) {
-        const aggId = childToAgg.get(`${coreId}\t${edgeId}`)
-        if (aggId && aggNodes[aggId]?.coreId === coreId) {
-          if (!replacedAggIds.has(aggId)) {
-            replacedAggIds.add(aggId)
-            newEdgeIds.push(aggId)
-            newLinkIndices.push(-1)
-          }
-        } else {
-          newEdgeIds.push(edgeId)
-          const coreIdx = nodeToEdgeLinkIndices[coreId] ?? []
-          for (const li of coreIdx) {
-            const l = effectiveLinks[li]
-            if (l && (l.source === edgeId || l.target === edgeId)) {
-              // [FIX] 链接统一写入 childLinksPool 并存其索引，与运行时
-              // pc.allChildLinks[linkIndices[i]] 的查询保持同一索引空间。
-              childLinksPool.push({
-                source: l.source,
-                target: l.target,
-                sourceField: l.sourceField,
-              })
-              newLinkIndices.push(childLinksPool.length - 1)
-              break
-            }
-          }
-        }
-      }
-      updatedNodeToEdgeNodeIds[coreId] = newEdgeIds
-      updatedNodeToEdgeLinkIndices[coreId] = newLinkIndices
-    }
+    const updatedNodeToEdgeNodeIds = nodeToEdgeNodeIds
+    const updatedNodeToEdgeLinkIndices = nodeToEdgeLinkIndices
 
     // ===== Step 8: 大区节点生成 =====
     const regionNodes: Record<string, PreRegionNodeInfo> = {}
@@ -655,6 +461,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
     // ===== 组装输出 =====
     const result: GlobalGraphPrecomputed = {
       version: 1,
+      expansionMode: "on-demand",
       generatedAt: Date.now(),
       folderTitles,
       config: {
@@ -678,9 +485,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
       aggToCore,
       regionNodes,
       coreToRegion,
-      // Append core-to-core relations without shifting existing childLinkIndices.
-      allChildLinks: [...childLinksPool, ...effectiveLinks.filter(link =>
-        coreNodeIdSet.has(link.source) && coreNodeIdSet.has(link.target))],
+      allChildLinks: effectiveLinks,
       coreNodeIds: [...coreNodeIdSet],
       edgeNodeIds: [...edgeNodeIdSet],
       nodeLinkCounts: Object.fromEntries(nodeLinkCount),
