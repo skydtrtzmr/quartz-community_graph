@@ -36,6 +36,7 @@ import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/ag
 import { focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes } from "./views"
 import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
 import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
+import { indexGraphLinks } from "./graphLinkIndex"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
@@ -919,6 +920,15 @@ function main() {
       const details = contentData.get(node.id)
       return { slug: details?.slug ?? node.id, frontmatter: details?.frontmatter }
     }
+    let indexedLinks: LinkData[] | undefined
+    let linkIndex: ReturnType<typeof indexGraphLinks<LinkData>> | undefined
+    const incidentLinks = (ids: Iterable<string>) => {
+      if (indexedLinks !== allLinks) {
+        indexedLinks = allLinks
+        linkIndex = indexGraphLinks(allLinks)
+      }
+      return linkIndex!.incident(ids)
+    }
     const createSharedGroups = (parent: NodeData, members: NodeData[], rules?: AggregationRule[], folderOnly = false) => {
       const result = folderOnly
         ? groupGlobalNeighbors(members, sharedAggregation, describeAggregationNode)
@@ -934,7 +944,7 @@ function main() {
           aggCollapsedRadius: Math.min(30, Math.max(16, 2 + Math.sqrt(group.members.length))),
         }
         const memberIds = new Set(group.members.map(n => n.id))
-        const childLinks = allLinks.filter(l => memberIds.has(l.source.id) || memberIds.has(l.target.id))
+        const childLinks = incidentLinks(memberIds)
         const currentField = rule.type === "folder" ? "📁" : rule.field
         aggNodeInfoMap.set(id, {
           node,
@@ -1356,6 +1366,7 @@ function main() {
       }))
 
       // 链接去重
+      const allNodeById = new Map(allNodes.map(node => [node.id, node]))
       const linkKeySet = new Set<string>()
       allLinks = links
         .filter((l) => neighbourhood.has(l.source) && neighbourhood.has(l.target))
@@ -1366,8 +1377,8 @@ function main() {
           return true
         })
         .map((l) => ({
-          source: allNodes.find((n) => n.id === l.source)!,
-          target: allNodes.find((n) => n.id === l.target)!,
+          source: allNodeById.get(l.source)!,
+          target: allNodeById.get(l.target)!,
           sourceField: l.sourceField,
         }))
 
@@ -1494,18 +1505,34 @@ function main() {
         // A local view has one explicit center, irrespective of neighbors' link counts.
         const collectionGraph = graphView !== "local"
         const centers = nonOrphanNodes.filter(n => collectionGraph ? n.isCore : n.id === slug)
+        const scopedLinkIndex = indexGraphLinks(nonOrphanLinks)
+        const nodeOrder = new Map(nonOrphanNodes.map((node, index) => [node.id, index]))
+        const scopedNodes = new Map(nonOrphanNodes.map(node => [node.id, node]))
+        const groupingStart = performance.now()
+        let sliceStart = groupingStart
         for (const center of centers) {
-          const neighbors = new Set(nonOrphanLinks.flatMap(l =>
+          // Let directory clicks and navigation run between bounded batches.
+          if (collectionGraph && performance.now() - sliceStart > 8) {
+            await new Promise<void>(resolve => setTimeout(resolve, 0))
+            if (!checkGeneration(generation)) return () => {}
+            sliceStart = performance.now()
+          }
+          const centerLinks = scopedLinkIndex.incident([center.id])
+          const neighbors = new Set(centerLinks.flatMap(l =>
             l.source.id === center.id ? [l.target.id] : l.target.id === center.id ? [l.source.id] : []))
           neighbors.delete(center.id)
-          const members = nonOrphanNodes.filter(n => neighbors.has(n.id) && (!collectionGraph || !n.isCore) && !n.isAggregation)
+          const members = [...neighbors].map(id => scopedNodes.get(id)!)
+            .filter(n => (!collectionGraph || !n.isCore) && !n.isAggregation)
+            .sort((a, b) => nodeOrder.get(a.id)! - nodeOrder.get(b.id)!)
           const grouped = createSharedGroups(center, members, undefined, collectionGraph)
+          const groupedIds = new Set(grouped.map(node => node.id))
           nodeToEdgeNodes.set(center.id, grouped)
           nodeToEdgeLinks.set(center.id, [
-            ...nonOrphanLinks.filter(l => (l.source.id === center.id || l.target.id === center.id) && grouped.some(n => n.id === (l.source.id === center.id ? l.target.id : l.source.id))),
+            ...centerLinks.filter(l => groupedIds.has(l.source.id === center.id ? l.target.id : l.source.id)),
             ...grouped.filter(n => n.isAggregation).map(n => ({ source: n, target: center })),
           ])
         }
+        console.debug(`[Graph] Neighbor grouping: ${centers.length} centers in ${(performance.now() - groupingStart).toFixed(1)}ms`)
         for (const info of aggNodeInfoMap.values()) nonOrphanNodes.push(info.node)
       } else if (rules.length > 0 && graphView !== "folder") {
         // 逐个核心节点，对其单链接叶节点按规则顺序聚合
