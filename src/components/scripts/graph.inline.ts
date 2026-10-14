@@ -43,7 +43,7 @@ import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilt
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import { selectSharedRules } from "../../util/dimensionSelection"
 import { showOriginalCenterLink } from "../../util/aggregatedLinks"
-import { limitVisibleNodes, resolveLoadBatchSize, resolveMaxVisibleNodes } from "./visibleNodes"
+import { ExpansionPages, resolveExpandBatchSize } from "./expansionPages"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -492,8 +492,7 @@ function main() {
       coreNodeFilter,
       coreNodeLimit: rawCoreNodeLimit,
       coreMinLinks,
-      maxVisibleNodes: rawMaxVisibleNodes,
-      loadBatchSize: rawLoadBatchSize,
+      expandBatchSize: rawExpandBatchSize,
       coreAggregationMaxLevels,
       regionRules,
       expandCoresOnRegionOpen = true,
@@ -670,8 +669,7 @@ function main() {
     const contentData = data!
     const isGlobalGraph = depth < 0
     const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
-    const maxVisibleNodes = resolveMaxVisibleNodes(rawMaxVisibleNodes)
-    const loadBatchSize = resolveLoadBatchSize(rawLoadBatchSize)
+    const expandBatchSize = resolveExpandBatchSize(rawExpandBatchSize)
 
     // ===== 前向声明：预计算路径和计算路径都会设置的变量 =====
     // 这些变量在展开/收起函数中被引用，必须提升到两个路径的公共作用域
@@ -755,37 +753,10 @@ function main() {
       ((selection?.linkCounts[b.id] ?? nodeLinkCount.get(b.id) ?? 0) -
         (selection?.linkCounts[a.id] ?? nodeLinkCount.get(a.id) ?? 0)) ||
       compareListingValue(a, b) || collator.compare(String(a.id), String(b.id))
-    const limitNodes = (existing: NodeData[], proposed: NodeData[], links: LinkData[]) =>
-      graphView === "local"
-        ? { nodes: proposed, links, omitted: 0 }
-        : limitVisibleNodes(existing, proposed, links, maxVisibleNodes, isVisibleFile, compareVisibleFiles)
-    // ===== 「+N」溢出状态：超出首批预算的节点折叠进占位节点，点击分批加载 =====
-    const overflowState = {
-      placeholderId: "overflow:placeholder" as SimpleSlug,
-      nodes: [] as NodeData[],
-      links: [] as LinkData[],
-    }
+    const expansionPages = new ExpansionPages<NodeData, LinkData>(expandBatchSize, compareVisibleFiles)
     const updateVisibleCount = () => {
-      if (graphView === "local") return
-      const visible = graphData.nodes.filter(isVisibleFile).length
-      const total = new Set(allNodes.filter(isVisibleFile).map((node) => node.id)).size
-      graph.dataset.visibleFileCount = String(visible)
-      graph.dataset.totalFileCount = String(total)
-      const host = graph.parentElement
-      let status = host?.querySelector<HTMLElement>(".graph-visible-status")
-      // 仍有未加载的溢出节点（或占位节点在图上）时显示实时计数
-      const hasOverflow =
-        overflowState.nodes.length > 0 ||
-        graphData.nodes.some((node) => node.id === overflowState.placeholderId)
-      if (visible < total && hasOverflow && host) {
-        if (!status) {
-          status = document.createElement("div")
-          status.className = "graph-visible-status"
-          status.style.cssText = "font-size:.8rem;color:var(--gray);padding:.25rem 0"
-          host.appendChild(status)
-        }
-        status.textContent = `图谱已显示 ${visible} / ${total} 个文件（点击「+ N」加载更多）`
-      } else status?.remove()
+      graph.dataset.visibleFileCount = String(graphData.nodes.filter(isVisibleFile).length)
+      graph.dataset.totalFileCount = String(new Set(allNodes.filter(isVisibleFile).map(node => node.id)).size)
     }
     let allLinks: LinkData[] = []
 
@@ -900,8 +871,6 @@ function main() {
 
     /** 统一节点跳转：普通节点 → 文档；聚合节点 → 维度值页 / 文件夹页；大区节点不跳转 */
     function navigateToNode(nodeId: SimpleSlug, fullSlug: FullSlug): void {
-      // 「+N」占位节点：单击已由 toggleNodeExpansion 分批加载，双击不跳转
-      if (nodeId.startsWith("overflow:")) return
       if (nodeId.startsWith("agg:")) {
         void resolveAggregationTarget(nodeId).then((target) => {
           if (target) window.spaNavigate(new URL(target, window.location.origin))
@@ -1642,14 +1611,6 @@ function main() {
         graphData = { nodes: mergedNodes, links: mergedLinks }
       }
     } // end else (!globalPrecomputed)
-
-    if (graphView !== "local") {
-      const capped = limitNodes([], graphData.nodes, graphData.links)
-      graphData = { nodes: capped.nodes, links: capped.links }
-      // 溢出节点折叠进「+N」占位节点（此时 Pixi 未初始化，主渲染循环会统一创建渲染对象）
-      collectOverflow(capped, false)
-      updateVisibleCount()
-    }
 
     const focusIds = focusNodeIds(
       graphView,
@@ -2580,21 +2541,11 @@ function main() {
           }
         }
 
-        const cappedRegion = limitNodes(graphData.nodes, nodesToAdd, linksToAdd)
-        collectOverflow(cappedRegion, true)
-        // 先标记已展开（即使本批全部溢出、0 入图），否则二次点击不会走 collapse 分支
+        const page = expansionPages.open(nodeId, graphData.nodes, nodesToAdd, linksToAdd)
         expandedNodeIds.add(nodeId)
-        nodesToAdd.splice(0, nodesToAdd.length, ...cappedRegion.nodes)
-        linksToAdd = cappedRegion.links
-        if (nodesToAdd.length === 0 && linksToAdd.length === 0) {
-          // 成员已全部折入「+N」队列：收起时同样要从队列剔除
-          const ids = new Set<string>()
-          const info = regionNodeInfoMap.get(nodeId)
-          if (info) for (const m of info.childCores) ids.add(m.id)
-          purgeOverflow(ids)
-          updateVisibleCount()
-          return
-        }
+        nodesToAdd.splice(0, nodesToAdd.length, ...page.nodes)
+        linksToAdd = page.links
+        updateExpansionControls()
         if (nodesToAdd.length > 0 || linksToAdd.length > 0) {
           graphData.nodes.push(...nodesToAdd)
           graphData.links.push(...linksToAdd)
@@ -2821,20 +2772,13 @@ function main() {
         edgeLinksToAdd = plan.links
       }
 
-      const cappedEdges = limitNodes(graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)
-      collectOverflow(cappedEdges, true)
-      // 先标记已展开（即使本批全部溢出、0 入图），保证二次点击能走 collapse 分支
-      expandedNodeIds.add(nodeId)
-      edgeNodesToAdd = cappedEdges.nodes
-      edgeLinksToAdd = cappedEdges.links
-      if (edgeNodesToAdd.length === 0) {
-        const ids = new Set<string>()
-        for (const e of cappedEdges.overflow) ids.add(String(e.id))
-        purgeOverflow(ids)
-        updateVisibleCount()
-        return
+      if (isAggNode) {
+        const page = expansionPages.open(nodeId, graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)
+        edgeNodesToAdd = page.nodes
+        edgeLinksToAdd = page.links
       }
-
+      expandedNodeIds.add(nodeId)
+      updateExpansionControls()
       const parentNode = graphData.nodes.find((n) => n.id === nodeId)
 
       // Keep the clicked aggregation anchored while its children settle around it.
@@ -2944,6 +2888,7 @@ function main() {
 
     function collapseNode(nodeId: SimpleSlug) {
       if (!expandedNodeIds.has(nodeId)) return
+      expansionPages.close(nodeId)
       // A collapse destroys Pixi objects. Stop tweens that may still reference them
       // before the next animation frame updates their positions or scale.
       tweens.forEach((tween) => tween.stop())
@@ -3049,10 +2994,6 @@ function main() {
         }
 
         expandedNodeIds.delete(nodeId)
-        // 收起时把该分区尚未加载的溢出成员一并移出「+N」队列
-        const regionOverflowIds = new Set<string>()
-        for (const m of targetNode.regionChildIds ?? []) regionOverflowIds.add(String(m))
-        purgeOverflow(regionOverflowIds)
         simulation.nodes(graphData.nodes)
         simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
         simulation.alpha(0.3).restart()
@@ -3210,9 +3151,7 @@ function main() {
       expandedNodeIds.delete(nodeId)
       expandedAggChildren.delete(nodeId)
       // 收起时把该节点尚未加载的溢出成员一并移出「+N」队列
-      const overflowMemberIds = new Set<string>()
-      for (const e of edgeNodesToRemove) overflowMemberIds.add(String(e.id))
-      purgeOverflow(overflowMemberIds)
+
       const nodeData = graphData.nodes.find((n) => n.id === nodeId)
       if (nodeData) {
         nodeData.isExpanded = false
@@ -3252,122 +3191,76 @@ function main() {
     }
 
     function toggleNodeExpansion(nodeId: SimpleSlug) {
-      // 「+N」占位节点：单击加载下一批溢出节点
-      if (nodeId.startsWith("overflow:")) {
-        loadOverflowBatch()
-        return
-      }
       expandedNodeIds.has(nodeId) ? collapseNode(nodeId) : expandNode(nodeId)
+      updateExpansionControls()
     }
 
-    /**
-     * 把溢出节点折入队列并确保占位节点在图上。
-     * createRender=false：Pixi 尚未初始化（首屏路径），只入 graphData，渲染交给主循环；
-     * createRender=true：Pixi 已初始化（展开路径），立即补渲染对象并轻推模拟。
-     */
-    function collectOverflow(
-      capped: { overflow: NodeData[]; overflowLinks: LinkData[] },
-      createRender: boolean,
-    ): void {
-      if (capped.overflow.length === 0) return
-      overflowState.nodes.push(...capped.overflow)
-      overflowState.links.push(...capped.overflowLinks)
-      const pid = overflowState.placeholderId
-      const existing = graphData.nodes.find((n) => n.id === pid)
-      if (existing) {
-        existing.text = `+ ${overflowState.nodes.length} 个节点`
-        const rd = nodeRenderData.find((r) => r.simulationData.id === pid)
-        if (rd) rd.label.text = existing.text
-        if (createRender) {
-          simulation.nodes(graphData.nodes)
-          simulation.alpha(0.15).restart()
+    // 操作区固定在画布外，不参与力导向模拟。
+    const expansionControls = document.createElement("div")
+    expansionControls.className = "graph-expansion-controls"
+    expansionControls.style.cssText = "display:flex;flex-direction:column;gap:.4rem;padding:.5rem 0;font-size:.85rem;color:var(--darkgray)"
+    if (graph.classList.contains("global-graph-container")) {
+      expansionControls.style.cssText += ";position:fixed;left:10vw;right:10vw;bottom:1vh;max-height:8vh;overflow:auto;background:var(--light);padding:.5rem;z-index:1"
+    }
+    const controlsAnchor = graph.closest(".graph-outer") ?? graph
+    controlsAnchor.insertAdjacentElement("afterend", expansionControls)
+    function updateExpansionControls() {
+      expansionControls.replaceChildren()
+      const visible = new Set(graphData.nodes.map(node => String(node.id)))
+      for (const [id, progress] of expansionPages.pending()) {
+        if (!visible.has(id) || !expandedNodeIds.has(id as SimpleSlug)) {
+          expansionPages.close(id)
+          continue
         }
-        return
+        const parent = graphData.nodes.find(node => node.id === id)
+        const row = document.createElement("div")
+        row.style.cssText = "display:flex;align-items:center;gap:.6rem;flex-wrap:wrap"
+        const label = document.createElement("span")
+        label.textContent = (parent?.text ?? id) + " · 已加载 " + progress.loaded + " / " + progress.total
+        const button = document.createElement("button")
+        button.type = "button"
+        button.dataset.expansionParent = id
+        button.textContent = "加载更多（剩余 " + (progress.total - progress.loaded) + "）"
+        button.style.cssText = "cursor:pointer;border:1px solid var(--gray);border-radius:4px;padding:.3rem .6rem;background:var(--light);color:var(--dark)"
+        button.addEventListener("click", () => loadExpansionPage(id as SimpleSlug))
+        row.append(label, button)
+        expansionControls.append(row)
       }
-      // region 形态：标签常显、虚线圆；不占文件预算、不进文件计数，双击不跳转
-      const node: NodeData = {
-        id: pid,
-        text: `+ ${overflowState.nodes.length} 个节点`,
-        tags: [],
-        isCore: false,
-        isRegion: true,
-        regionChildIds: [],
-        edgeNodeCount: overflowState.nodes.length,
-        aggCollapsedRadius: Math.min(
-          30,
-          Math.max(18, 4 + Math.sqrt(overflowState.nodes.length) * 2.2),
-        ),
-      }
-      graphData.nodes.push(node)
-      if (createRender) {
+      expansionControls.style.display = expansionControls.childElementCount === 0 ? "none" : "flex"
+    }
+    function loadExpansionPage(id: SimpleSlug) {
+      const parent = graphData.nodes.find(node => node.id === id)
+      if (!parent || !expandedNodeIds.has(id)) return
+      const page = expansionPages.next(id, graphData.nodes)
+      for (const [index, node] of page.nodes.entries()) {
+        const angle = index * Math.PI * 2 / Math.max(1, page.nodes.length)
+        node.x = (parent.x ?? 0) + Math.cos(angle) * 80
+        node.y = (parent.y ?? 0) + Math.sin(angle) * 80
+        node.vx = node.vy = 0
+        graphData.nodes.push(node)
         nodeRenderData.push(createNodeRenderObject(node))
-        simulation.nodes(graphData.nodes)
-        simulation.alpha(0.15).restart()
       }
-    }
-
-    /** 点击「+N」：取下一批溢出节点入图，并补齐两端均已可见的关联边 */
-    function loadOverflowBatch(): void {
-      if (overflowState.nodes.length === 0) return
-      const batch = overflowState.nodes.splice(0, loadBatchSize)
-      const graphNodeIds = new Set(graphData.nodes.map((n) => n.id))
-      const fresh = batch.filter((n) => !graphNodeIds.has(n.id))
-      for (const n of fresh) graphNodeIds.add(n.id)
-      // 补边：pending 中两端均已入图的边；一端仍在队列的边留下次
-      const ready: LinkData[] = []
-      overflowState.links = overflowState.links.filter((link) => {
-        const sid = String((link.source as NodeData).id ?? link.source)
-        const tid = String((link.target as NodeData).id ?? link.target)
-        if (graphNodeIds.has(sid) && graphNodeIds.has(tid)) {
-          ready.push(link)
-          return false
-        }
-        return true
-      })
-      graphData.nodes.push(...fresh)
-      graphData.links.push(...ready)
-      for (const n of fresh) nodeRenderData.push(createNodeRenderObject(n))
-      updateOverflowPlaceholder()
+      const edgeKeys = new Set(graphData.links.map(link => JSON.stringify([link.source.id, link.target.id, link.sourceField])))
+      for (const link of page.links) {
+        const key = JSON.stringify([link.source.id, link.target.id, link.sourceField])
+        if (edgeKeys.has(key)) continue
+        edgeKeys.add(key)
+        graphData.links.push(link)
+        linkRenderData.push(createLinkRenderObject(link))
+      }
+      if (parent.isAggregation) {
+        const children = expandedAggChildren.get(id) ?? new Set<SimpleSlug>()
+        for (const child of page.nodes) children.add(child.id)
+        expandedAggChildren.set(id, children)
+      }
       renderLabels()
       simulation.nodes(graphData.nodes)
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
-      simulation.alpha(0.3).restart()
+      simulation.alpha(0.12).restart()
+      updateExpansionControls()
       updateVisibleCount()
     }
-
-    /** 收起节点时把其成员从「+N」队列中剔除，并同步占位节点计数 */
-    function purgeOverflow(memberIds: Set<string>): void {
-      if (overflowState.nodes.length === 0 || memberIds.size === 0) return
-      overflowState.nodes = overflowState.nodes.filter((n) => !memberIds.has(n.id))
-      overflowState.links = overflowState.links.filter((link) => {
-        const sid = String((link.source as NodeData).id ?? link.source)
-        const tid = String((link.target as NodeData).id ?? link.target)
-        return !memberIds.has(sid) && !memberIds.has(tid)
-      })
-      updateOverflowPlaceholder()
-    }
-
-    /** 队列清空时移除占位节点（归还对象池），否则同步其文案 */
-    function updateOverflowPlaceholder(): void {
-      const pid = overflowState.placeholderId
-      const node = graphData.nodes.find((n) => n.id === pid)
-      if (!node) return
-      if (overflowState.nodes.length === 0) {
-        const renderIdx = nodeRenderData.findIndex((r) => r.simulationData.id === pid)
-        if (renderIdx !== -1) {
-          const rd = nodeRenderData[renderIdx]
-          graphicsPool.release(rd.gfx)
-          textPool.release(rd.label)
-          nodeRenderData.splice(renderIdx, 1)
-        }
-        const nodeIdx = graphData.nodes.findIndex((n) => n.id === pid)
-        if (nodeIdx !== -1) graphData.nodes.splice(nodeIdx, 1)
-        return
-      }
-      node.text = `+ ${overflowState.nodes.length} 个节点`
-      const rd = nodeRenderData.find((r) => r.simulationData.id === pid)
-      if (rd) rd.label.text = node.text
-    }
+    updateExpansionControls()
 
     // ===== 拖拽和缩放 =====
     let currentTransform = zoomIdentity
@@ -3740,6 +3633,7 @@ function main() {
         cancelAnimationFrame(animationId)
         animationId = null
       }
+      expansionControls.remove()
       simulation.stop()
       tweens.forEach((t) => t.stop())
       tweens.clear()
@@ -3794,8 +3688,7 @@ function main() {
       container.dataset["basepath"] = document.body?.dataset?.basepath ?? ""
       container.dataset["cfg"] = JSON.stringify({
         ...DIMENSION_GRAPH_DEFAULTS,
-        maxVisibleNodes: sharedCfg?.maxVisibleNodes,
-        loadBatchSize: sharedCfg?.loadBatchSize,
+        expandBatchSize: sharedCfg?.expandBatchSize,
       })
       container.dataset["precomputeDepth"] = "1"
       container.dataset["sharedAggregation"] = "true"
