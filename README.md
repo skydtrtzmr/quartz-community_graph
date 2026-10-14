@@ -182,6 +182,26 @@ External libraries are loaded from CDN when the graph is first rendered.
 
 ## Development
 
+### 分批展开与整体上限
+
+四种图谱（全局、文件夹、维度值、文件局部）共用插件的 `options.graph`：
+
+```yaml
+graph:
+  maxVisibleNodes: 500
+  expandBatchSize: 20
+  loadBatchSize: 100
+```
+
+- `maxVisibleNodes` 沿用已有配置名，现表示**首屏节点预算**，包含文件、聚合、大区。首屏在创建 Pixi 对象和力导向模拟前截断；用户后续主动展开、加载更多可以超过这个数量。
+- `expandBatchSize` 控制每个聚合/大区自己的展开批次；各分类进度独立。
+- `loadBatchSize` 控制普通节点及首屏溢出队列的后续批次。
+- 底部分类条显示分类名和进度。选择分类后，唯一的加载按钮明确标注目标分类。完整路径在提示中显示。
+- 无聚合时通过“当前图谱”继续加载，每次 `loadBatchSize` 项；有聚合时按选中的分类独立加载，每次 `expandBatchSize` 项。仅在该队列全部加载完成时禁用按钮。
+- 首屏预算不是绝对硬上限；连续主动加载会增加总可见数量。当前没有另外设置绝对硬上限。
+
+项目内演示：`node scripts/create-graph-pagination-domain.mjs [每组成员数=200]`，生成 `graph-demo` 业务域的 `grouped` 和 `plain` 两个等量目录。演示域首屏预算 40，聚合每批 5 项，无聚合后续每批 10 项，便于观察超过首屏预算后的加载与收起行为。
+
 This is a first-party Quartz community plugin. It serves as both:
 
 1. A production-ready Graph View component

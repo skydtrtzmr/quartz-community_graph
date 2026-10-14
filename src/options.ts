@@ -22,6 +22,10 @@ export interface GraphProOptions {
     coreMinLinks?: number
     /** 每个聚合节点首次展开及继续加载的子节点数量，默认 20 */
     expandBatchSize?: number
+    /** 首屏可见节点预算（包含聚合和大区），默认 500；后续可主动分批加载。 */
+    maxVisibleNodes?: number
+    /** 非聚合展开队列的批次，默认 100。 */
+    loadBatchSize?: number
   }
 
   /** 交互期：局部图谱参数（第二步接入组件时使用，构建期不使用） */

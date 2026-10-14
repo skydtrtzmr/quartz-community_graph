@@ -5,6 +5,8 @@
 //   只留下下面这个 `position: fixed` 的覆盖层
 // - 覆盖层默认 `display: none`，`.active` 时才显示（由 graph.inline.ts 切换）
 
+@use "./expansion-controls";
+
 .graph-overlay-host {
   display: contents;
 
@@ -29,10 +31,11 @@
       border-radius: 5px;
       box-sizing: border-box;
       position: fixed;
-      top: 50%;
+      top: 5vh;
       left: 50%;
-      transform: translate(-50%, -50%);
-      height: 80vh;
+      transform: translateX(-50%);
+      height: calc(90vh - 175px);
+      min-height: 250px;
       width: 80vw;
 
       @media all and (max-width: 800px) {

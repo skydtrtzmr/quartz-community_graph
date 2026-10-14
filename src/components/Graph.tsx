@@ -47,6 +47,10 @@ export interface D3Config {
   coreMinLinks?: number;
   /** 每个聚合节点首次展开和加载更多的子节点数量，默认 20 */
   expandBatchSize?: number;
+  /** 首屏可见节点预算（包括聚合及大区），默认 500；后续可主动分批加载。 */
+  maxVisibleNodes?: number;
+  /** 普通节点及首屏溢出队列的加载批次，默认 100。 */
+  loadBatchSize?: number;
   /** 全局核心集合的字段聚合上限，不计文件夹层（默认 2） */
   coreAggregationMaxLevels?: number;
   /** 大区聚合规则（配置后首屏显示大区节点，点击展开） */
@@ -63,7 +67,7 @@ export interface D3Config {
  * 用户可配的图谱参数：**不含**内部分组字段
  * （`aggregation` / `regionRules` / `coreNodeFilter` 由 `resolveGraphGrouping` 从 `folders` 合成）。
  */
-export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter" | "coreMinLinks" | "expandBatchSize"> & {
+export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "coreNodeFilter" | "coreMinLinks" | "expandBatchSize" | "maxVisibleNodes" | "loadBatchSize"> & {
   /** 主体文件夹白名单；空 / 缺省时由 coreMinLinks 从全部目录选择核心内容节点 */
   folders?: string[];
 };
@@ -75,6 +79,8 @@ export interface GraphOptions {
     localDepth?: number;
     coreMinLinks?: number;
     expandBatchSize?: number;
+    maxVisibleNodes?: number;
+    loadBatchSize?: number;
   };
   localGraph?: Partial<GraphUserConfig>;
   /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
@@ -122,6 +128,8 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
       ...userOpts?.localGraph,
       coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0,
       expandBatchSize: userOpts?.graph?.expandBatchSize,
+      maxVisibleNodes: userOpts?.graph?.maxVisibleNodes,
+      loadBatchSize: userOpts?.graph?.loadBatchSize,
     };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);

@@ -43,7 +43,8 @@ import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilt
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
 import { selectSharedRules } from "../../util/dimensionSelection"
 import { showOriginalCenterLink } from "../../util/aggregatedLinks"
-import { ExpansionPages, resolveExpandBatchSize } from "./expansionPages"
+import { ExpansionPages, resolveExpandBatchSize, resolveMaxVisibleNodes, resolveLoadBatchSize } from "./expansionPages"
+import { createExpansionControls, type ExpansionControlItem } from "./expansionControls"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -493,6 +494,8 @@ function main() {
       coreNodeLimit: rawCoreNodeLimit,
       coreMinLinks,
       expandBatchSize: rawExpandBatchSize,
+      maxVisibleNodes: rawMaxVisibleNodes,
+      loadBatchSize: rawLoadBatchSize,
       coreAggregationMaxLevels,
       regionRules,
       expandCoresOnRegionOpen = true,
@@ -670,6 +673,8 @@ function main() {
     const isGlobalGraph = depth < 0
     const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
     const expandBatchSize = resolveExpandBatchSize(rawExpandBatchSize)
+    const initialNodeLimit = resolveMaxVisibleNodes(rawMaxVisibleNodes)
+    const loadBatchSize = resolveLoadBatchSize(rawLoadBatchSize)
 
     // ===== 前向声明：预计算路径和计算路径都会设置的变量 =====
     // 这些变量在展开/收起函数中被引用，必须提升到两个路径的公共作用域
@@ -753,9 +758,15 @@ function main() {
       ((selection?.linkCounts[b.id] ?? nodeLinkCount.get(b.id) ?? 0) -
         (selection?.linkCounts[a.id] ?? nodeLinkCount.get(a.id) ?? 0)) ||
       compareListingValue(a, b) || collator.compare(String(a.id), String(b.id))
-    const expansionPages = new ExpansionPages<NodeData, LinkData>(expandBatchSize, compareVisibleFiles)
+    const expansionPages = new ExpansionPages<NodeData, LinkData>(expandBatchSize, (a, b) =>
+      Number(b.id === slug) - Number(a.id === slug) ||
+      Number(!!b.isRegion || !!b.isAggregation) - Number(!!a.isRegion || !!a.isAggregation) ||
+      compareVisibleFiles(a, b))
+    const initialPageId = "__graph_initial__"
     const updateVisibleCount = () => {
       graph.dataset.visibleFileCount = String(graphData.nodes.filter(isVisibleFile).length)
+      graph.dataset.visibleNodeCount = String(graphData.nodes.length)
+      graph.dataset.initialNodeLimit = String(initialNodeLimit)
       graph.dataset.totalFileCount = String(new Set(allNodes.filter(isVisibleFile).map(node => node.id)).size)
     }
     let allLinks: LinkData[] = []
@@ -1611,6 +1622,13 @@ function main() {
         graphData = { nodes: mergedNodes, links: mergedLinks }
       }
     } // end else (!globalPrecomputed)
+
+    // Limit the initial screen before creating Pixi objects or the simulation.
+    // Later user-triggered expansions use their own batch size, without this ceiling.
+    if (graphData.nodes.length > initialNodeLimit) {
+      const first = expansionPages.open(initialPageId, [], graphData.nodes, graphData.links, loadBatchSize, initialNodeLimit)
+      graphData = { nodes: first.nodes, links: first.links }
+    }
 
     const focusIds = focusNodeIds(
       graphView,
@@ -2772,8 +2790,9 @@ function main() {
         edgeLinksToAdd = plan.links
       }
 
-      if (isAggNode) {
-        const page = expansionPages.open(nodeId, graphData.nodes, edgeNodesToAdd, edgeLinksToAdd)
+      {
+        const page = expansionPages.open(nodeId, graphData.nodes, edgeNodesToAdd, edgeLinksToAdd,
+          isAggNode ? expandBatchSize : loadBatchSize)
         edgeNodesToAdd = page.nodes
         edgeLinksToAdd = page.links
       }
@@ -3191,51 +3210,55 @@ function main() {
     }
 
     function toggleNodeExpansion(nodeId: SimpleSlug) {
+      if (!expandedNodeIds.has(nodeId)) pagination.select(nodeId)
       expandedNodeIds.has(nodeId) ? collapseNode(nodeId) : expandNode(nodeId)
       updateExpansionControls()
     }
 
     // 操作区固定在画布外，不参与力导向模拟。
-    const expansionControls = document.createElement("div")
-    expansionControls.className = "graph-expansion-controls"
-    expansionControls.style.cssText = "display:flex;flex-direction:column;gap:.4rem;padding:.5rem 0;font-size:.85rem;color:var(--darkgray)"
-    if (graph.classList.contains("global-graph-container")) {
-      expansionControls.style.cssText += ";position:fixed;left:10vw;right:10vw;bottom:1vh;max-height:8vh;overflow:auto;background:var(--light);padding:.5rem;z-index:1"
-    }
+    const pagination = createExpansionControls(id => loadExpansionPage(id as SimpleSlug), id => {
+      updateHoverInfo(id === initialPageId ? null : id)
+      renderPixiFromD3()
+    })
+    const expansionControls = pagination.element
     const controlsAnchor = graph.closest(".graph-outer") ?? graph
     controlsAnchor.insertAdjacentElement("afterend", expansionControls)
     function updateExpansionControls() {
-      expansionControls.replaceChildren()
       const visible = new Set(graphData.nodes.map(node => String(node.id)))
-      for (const [id, progress] of expansionPages.pending()) {
-        if (!visible.has(id) || !expandedNodeIds.has(id as SimpleSlug)) {
+      const items: ExpansionControlItem[] = []
+      for (const [id, progress] of expansionPages.entries()) {
+        if (id !== initialPageId && (!visible.has(id) || !expandedNodeIds.has(id as SimpleSlug))) {
           expansionPages.close(id)
           continue
         }
         const parent = graphData.nodes.find(node => node.id === id)
-        const row = document.createElement("div")
-        row.style.cssText = "display:flex;align-items:center;gap:.6rem;flex-wrap:wrap"
-        const label = document.createElement("span")
-        label.textContent = (parent?.text ?? id) + " · 已加载 " + progress.loaded + " / " + progress.total
-        const button = document.createElement("button")
-        button.type = "button"
-        button.dataset.expansionParent = id
-        button.textContent = "加载更多（剩余 " + (progress.total - progress.loaded) + "）"
-        button.style.cssText = "cursor:pointer;border:1px solid var(--gray);border-radius:4px;padding:.3rem .6rem;background:var(--light);color:var(--dark)"
-        button.addEventListener("click", () => loadExpansionPage(id as SimpleSlug))
-        row.append(label, button)
-        expansionControls.append(row)
+        if (id !== initialPageId && progress.total <= (parent?.isAggregation || parent?.isRegion ? expandBatchSize : loadBatchSize) && progress.loaded === progress.total) continue
+        const ancestors: string[] = []
+        let ancestorId = aggToCoreMap.get(id as SimpleSlug)
+        const seen = new Set<string>([id])
+        while (ancestorId && !seen.has(ancestorId)) {
+          seen.add(ancestorId)
+          const ancestor = graphData.nodes.find(node => node.id === ancestorId)
+          if (ancestor) ancestors.unshift(ancestor.text)
+          ancestorId = aggToCoreMap.get(ancestorId)
+        }
+        const fullLabel = id === initialPageId ? "当前图谱" : parent?.text ?? id
+        const label = aggNodeInfoMap.get(id as SimpleSlug)?.groupKey
+          || fullLabel.replace(/^[^:：]+[:：]\s*/, "")
+        items.push({ id, label, path: [...ancestors, fullLabel].join(" / "),
+          color: parent?.isAggregation ? computedStyleMap["--secondary"]
+            : parent ? String(color(parent)) : computedStyleMap["--secondary"], ...progress })
       }
-      expansionControls.style.display = expansionControls.childElementCount === 0 ? "none" : "flex"
+      pagination.update(items, graphData.nodes.length, initialNodeLimit)
     }
     function loadExpansionPage(id: SimpleSlug) {
       const parent = graphData.nodes.find(node => node.id === id)
-      if (!parent || !expandedNodeIds.has(id)) return
+      if (id !== initialPageId && (!parent || !expandedNodeIds.has(id))) return
       const page = expansionPages.next(id, graphData.nodes)
       for (const [index, node] of page.nodes.entries()) {
         const angle = index * Math.PI * 2 / Math.max(1, page.nodes.length)
-        node.x = (parent.x ?? 0) + Math.cos(angle) * 80
-        node.y = (parent.y ?? 0) + Math.sin(angle) * 80
+        node.x = (parent?.x ?? 0) + Math.cos(angle) * 80
+        node.y = (parent?.y ?? 0) + Math.sin(angle) * 80
         node.vx = node.vy = 0
         graphData.nodes.push(node)
         nodeRenderData.push(createNodeRenderObject(node))
@@ -3248,7 +3271,7 @@ function main() {
         graphData.links.push(link)
         linkRenderData.push(createLinkRenderObject(link))
       }
-      if (parent.isAggregation) {
+      if (parent?.isAggregation) {
         const children = expandedAggChildren.get(id) ?? new Set<SimpleSlug>()
         for (const child of page.nodes) children.add(child.id)
         expandedAggChildren.set(id, children)
@@ -3261,6 +3284,7 @@ function main() {
       updateVisibleCount()
     }
     updateExpansionControls()
+    updateVisibleCount()
 
     // ===== 拖拽和缩放 =====
     let currentTransform = zoomIdentity
@@ -3689,6 +3713,8 @@ function main() {
       container.dataset["cfg"] = JSON.stringify({
         ...DIMENSION_GRAPH_DEFAULTS,
         expandBatchSize: sharedCfg?.expandBatchSize,
+        maxVisibleNodes: sharedCfg?.maxVisibleNodes,
+        loadBatchSize: sharedCfg?.loadBatchSize,
       })
       container.dataset["precomputeDepth"] = "1"
       container.dataset["sharedAggregation"] = "true"
