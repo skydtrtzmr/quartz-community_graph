@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { SimpleSlug } from "@quartz-community/types"
 import { descendantChildrenOf, directChildrenOf, djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
+import { filterGraphContent } from "../src/util/contentIndex"
 
 /**
  * 运行时读取端（graph3.inline.ts）使用的算法副本。
@@ -52,6 +53,29 @@ describe("graphLocal 路径协议", () => {
     for (const slug of slugs) {
       expect(getLocalGraphPath(slug as SimpleSlug)).toBe(runtimeLocalGraphPath(slug))
     }
+  })
+})
+
+describe("graph virtual node visibility", () => {
+  it("hides placeholders and dangling links, keeps dimension pages, tags and generated folder centers", () => {
+    const index = new Map<string, { filePath?: string; links: string[]; virtualNode?: boolean; frontmatter?: Record<string, unknown> }>([
+      ["real", { filePath: "real.md", links: ["ghost", "legacy", "old-json", "missing", "other", "_dimensions/type/value", "tags/topic"] }],
+      ["other", { filePath: "other.md", links: ["real"] }],
+      ["ghost", { filePath: "ghost.md", virtualNode: true, links: ["real"] }],
+      ["legacy", { filePath: "legacy.md", frontmatter: { virtualNode: true }, links: ["real"] }],
+      ["old-json", { filePath: "", links: [] }],
+      ["_dimensions/type/", { virtualNode: true, filePath: "", links: ["_dimensions/type/value"] }],
+      ["_dimensions/type/value", { virtualNode: true, filePath: "", links: ["real"] }],
+      ["tags/topic", { filePath: "", links: [] }],
+      ["generated/", { filePath: "", links: ["real"] }],
+    ])
+    const filtered = filterGraphContent(index)
+    expect([...filtered.keys()]).toEqual(["real", "other", "_dimensions/type/", "_dimensions/type/value", "tags/topic", "generated/"])
+    expect(filtered.get("real")?.links).toEqual(["other", "_dimensions/type/value", "tags/topic"])
+    expect(filtered.get("other")?.links).toEqual(["real"])
+    // Browser caches and indexes shared with other plugins must remain untouched.
+    expect(index.get("real")?.links).toContain("ghost")
+    expect(index.has("ghost")).toBe(true)
   })
 })
 

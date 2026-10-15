@@ -45,6 +45,7 @@ import { selectSharedRules } from "../../util/dimensionSelection"
 import { showOriginalCenterLink } from "../../util/aggregatedLinks"
 import { ExpansionPages, resolveExpandBatchSize, resolveMaxVisibleNodes, resolveLoadBatchSize } from "./expansionPages"
 import { createExpansionControls, type ExpansionControlItem } from "./expansionControls"
+import { filterGraphContent } from "../../util/contentIndex"
 import * as d3Namespace from "d3"
 import * as pixiNamespace from "pixi.js"
 
@@ -594,6 +595,13 @@ function main() {
         if (!checkGeneration(generation)) return () => {}
         if (pdata && (pdata as any).depth >= depth) {
           localGraphData = pdata as LocalGraphData
+          const visibleNodes = filterGraphContent(new Map(Object.entries(localGraphData.nodes)))
+          localGraphData = {
+            ...localGraphData,
+            nodes: Object.fromEntries(visibleNodes),
+            edges: localGraphData.edges.filter(edge => visibleNodes.has(edge.source) && visibleNodes.has(edge.target)),
+            matched: localGraphData.matched?.filter(match => visibleNodes.has(match.slug)),
+          }
           // 维度子图：按 ?scope=（目录前缀）与 ?context=（来源节点一跳）裁剪，
           // 必须在下面构建 neighbourhood/links 之前完成，这样后续所有派生结构都一致
           if (isDimensionGraph) {
@@ -653,12 +661,12 @@ function main() {
       } else {
         // 回退：加载完整 contentIndex
         console.log("[DEBUG] 开始等待 fetchData")
-        data = new Map(
+        data = filterGraphContent(new Map(
           Object.entries<ContentDetails>(await fetchData).map(([k, v]) => [
             simplifySlug(k as FullSlug),
             v,
           ]),
-        )
+        ))
         console.log("[DEBUG] fetchData 完成，数据条目数:", data.size)
       }
       if (!checkGeneration(generation)) return () => {}

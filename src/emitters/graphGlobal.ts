@@ -14,6 +14,7 @@ import { write } from "../util/write"
 import { readFile } from "node:fs/promises"
 import { globalCoreRules, readSharedAggregation } from "../util/sharedAggregation"
 import type { ContentDetails } from "../util/contentIndex"
+import { filterGraphContent } from "../util/contentIndex"
 import {
   UNCLASSIFIED_KEY,
   extractGroupKey,
@@ -150,6 +151,7 @@ export const GraphGlobalEmitter: QuartzEmitterPlugin<Partial<Options>> = (userOp
    * contentData 必须包含全量文件数据。
    */
   async function* computeAndEmit(ctx: BuildCtx, contentData: Map<SimpleSlug, ContentDetails>) {
+    contentData = filterGraphContent(contentData)
     const shared = (ctx.cfg.configuration as unknown as { aggregation?: unknown }).aggregation === undefined
       ? null
       : readSharedAggregation(JSON.parse(await readFile(joinSegments(ctx.argv.output, "static", "aggregation.json"), "utf8")))

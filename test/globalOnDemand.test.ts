@@ -12,10 +12,11 @@ it("prepares only the first screen and retains raw directed relations for later 
     await mkdir(join(output, "graph"))
     const item = (id: string, links: string[]) => ({ slug: id, title: id, filePath: `${id}.md`, tags: [], links, frontmatter: { title: id } })
     const index = {
-      "设备/a": item("设备/a", ["缺陷单/c"]),
+      "设备/a": item("设备/a", ["缺陷单/c", "ghost", "missing"]),
       "设备/b": item("设备/b", ["缺陷单/d"]),
       "缺陷单/c": item("缺陷单/c", ["缺陷单/d"]),
       "缺陷单/d": item("缺陷单/d", ["设备/a"]),
+      "ghost": { ...item("ghost", ["设备/a"]), virtualNode: true },
     }
     await writeFile(join(output, "static/contentIndex.json"), JSON.stringify(index))
     await writeFile(join(output, "graph/selection.json"), JSON.stringify({ version: 1, coreMinLinks: 0, linkCounts: { "设备/a": 2, "设备/b": 1, "缺陷单/c": 2, "缺陷单/d": 3 } }))
@@ -25,6 +26,8 @@ it("prepares only the first screen and retains raw directed relations for later 
     if (Symbol.asyncIterator in emitted) for await (const _file of emitted) { /* consume emitter */ }
     const graph = JSON.parse(await readFile(join(output, "graph/global/graphGlobal.json"), "utf8")) as GlobalGraphPrecomputed
     expect(graph.expansionMode).toBe("on-demand")
+    expect(graph.nodeDetails).not.toHaveProperty("ghost")
+    expect(graph.nodeDetails).not.toHaveProperty("missing")
     expect(graph.firstScreen.nodes).toEqual(["region:设备"])
     expect(graph.aggNodes).toEqual({})
     expect(Object.keys(graph.nodeDetails).filter(id => id.startsWith("agg:"))).toEqual([])

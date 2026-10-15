@@ -18,6 +18,7 @@ import { joinSegments } from "@quartz-community/types"
 import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
 import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
+import { filterGraphContent } from "../util/contentIndex"
 
 // LocalGraphEdge 与 graph3.inline.ts 中的 SimpleLinkData 对应
 interface LocalGraphEdge {
@@ -291,9 +292,10 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         tags: (data.frontmatter?.tags as string[]) ?? [],
         content: data.text ?? "",
         frontmatter: data.frontmatter ?? {},
+        virtualNode: data.virtualNode,
       })
     }
-    return linkIndex
+    return filterGraphContent(linkIndex)
   }
 
   return {
@@ -336,10 +338,11 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
       }
 
       // 构建全量 linkIndex
-      const linkIndex = new Map<SimpleSlug, ContentDetails>()
+      let linkIndex = new Map<SimpleSlug, ContentDetails>()
       for (const [k, v] of Object.entries(fullIndex)) {
         linkIndex.set(simplifySlug(k as FullSlug), v)
       }
+      linkIndex = filterGraphContent(linkIndex)
 
       const allExistingSlugs = new Set(linkIndex.keys())
       const allTags = new Set<SimpleSlug>()
