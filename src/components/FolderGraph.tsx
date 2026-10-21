@@ -16,9 +16,8 @@ const SYSTEM_FOLDERS = ["_dimensions", "tags"]
  * - 只在**文件夹页**渲染（slug 以 `/index` 结尾，且排除系统目录），其它页型返回 null
  * - 挂在 `layout` 的 `beforeBody` → 出现在**正文里**（而不是右栏）
  *
- * 数据来源：当前页（文件夹 index）的局部图谱产物。graphLocal emitter 已为文件夹页
- * 补入「该文件夹的全部后代内容文件」出链（见 `emitters/graphLocal.ts` 的 `withFolderChildren`），
- * 因此图谱展示的是「该文件夹内的文件 + 它们的关联节点」。
+ * 数据来源：graphFolder 构建目录成员集合及其直接关联，不使用文件局部图谱的 BFS 深度。
+ * 暂沿用 graph/local 的产物地址，由 view: folder 区分协议，便于已有站点迁移。
  */
 export default ((userOpts?: Partial<GraphOptions>) => {
   const globalLayout = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...userOpts?.globalGraph }

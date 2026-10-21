@@ -19,6 +19,7 @@ import { simplifySlug } from "@quartz-community/utils"
 import { write } from "../util/write"
 import type { ContentDetails, IndexableFileData } from "../util/contentIndex"
 import { filterGraphContent } from "../util/contentIndex"
+import { buildFolderGraph } from "./graphFolder"
 
 // LocalGraphEdge 与 graph3.inline.ts 中的 SimpleLinkData 对应
 interface LocalGraphEdge {
@@ -30,6 +31,7 @@ interface LocalGraphEdge {
 // LocalGraphData.nodes 使用与 ContentDetails 一致的结构
 interface LocalGraphData {
   version: number
+  view?: "folder"
   center: SimpleSlug // center node slug
   depth: number
   generatedAt: number
@@ -92,6 +94,11 @@ function isFolderIndexSlug(slug: SimpleSlug): boolean {
   return (
     slug === "/" || slug === "" || slug === "index" || slug.endsWith("/") || slug.endsWith("/index")
   )
+}
+
+function usesFolderCollection(slug: SimpleSlug): boolean {
+  return isFolderIndexSlug(slug) && slug !== "/" && slug !== "" && slug !== "index" &&
+    !slug.startsWith("tags/") && !slug.startsWith("_dimensions/")
 }
 
 /** 该文件夹的全部直属内容文件（不含更深层级和目录 index）。 */
@@ -216,18 +223,15 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
       } else {
         centerData = createVirtualContentDetails(slug, isTag)
       }
-      // 文件夹页：用该文件夹的后代内容文件补出链（index.md 本身无链接 → 否则图谱只剩孤立节点）
-      centerData = withFolderChildren(slug, centerData, linkIndex)
-
-      // 文件夹页深度 +1：depth1 = 文件夹下的节点，depth2 = 它们的关联节点
-      const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
-      const localGraph = calculateLocalGraph(
+      const localGraph = usesFolderCollection(slug)
+        ? buildFolderGraph(slug, linkIndex, folderTitles, getFrontmatterFieldForLink)
+        : calculateLocalGraph(
         slug,
-        centerData,
+        withFolderChildren(slug, centerData, linkIndex),
         linkIndex,
         validLinks,
         virtualNodes,
-        effectiveDepth,
+        isFolderIndexSlug(slug) ? depth + 1 : depth,
         folderTitles,
       )
 
@@ -468,17 +472,15 @@ export const GraphLocalEmitter: QuartzEmitterPlugin<Partial<Options>> = (opts) =
         } else {
           centerData = createVirtualContentDetails(slug, allTags.has(slug))
         }
-        centerData = withFolderChildren(slug, centerData, linkIndex)
-
-        // 文件夹页深度 +1：depth1 = 文件夹内节点，depth2 = 它们的关联节点
-        const effectiveDepth = isFolderIndexSlug(slug) ? depth + 1 : depth
-        const localGraph = calculateLocalGraph(
+        const localGraph = usesFolderCollection(slug)
+          ? buildFolderGraph(slug, linkIndex, folderTitles, getFrontmatterFieldForLink)
+          : calculateLocalGraph(
           slug,
-          centerData,
+          withFolderChildren(slug, centerData, linkIndex),
           linkIndex,
           validLinks,
           virtualNodes,
-          effectiveDepth,
+          isFolderIndexSlug(slug) ? depth + 1 : depth,
           folderTitles,
         )
         const path = getLocalGraphPath(slug)

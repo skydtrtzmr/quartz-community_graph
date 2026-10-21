@@ -48,12 +48,22 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 ## 文件夹页图谱布局
 
+文件夹图谱由 `emitters/graphFolder.ts` 构建，主体是目录子树内的真实内容文件。
+第一阶段保留成员间关系以及成员的直接入链、出链、标签，不继续递归遍历外部邻居；
+不再使用文件页的 `graph.localDepth` 或人工目录中心边。正文不写入文件夹产物，
+分类字段保留，以支持右上角动态分类。直接关联目前仍随基础 JSON 一起加载，分块按需获取待后续阶段实现。
+
+暂沿用 `graph/local/**` 地址，JSON 以 `view: "folder"` 标明集合语义；升级后应完整重建业务域，
+以替换旧 BFS 产物和页面脚本。未重建的其他业务域仍使用原有资源。
+控制台 `[GraphTiming]` 和图谱容器的 `data-graph-timings` 记录各初始化阶段毫秒数，
+同时记录原始节点数与首屏可见节点数。阶段时间包含主线程等待；首次 render 调用完成不等于 GPU 已完成呈现。
+
 后续待办：文件夹页的核心字段层数统一设计另行实施；`aggregation.json` 的字段对象
 改为字符串数组也单独迁移（需版本升级及各消费插件同步）。当前对象格式保留是兼容选择。
 
 `FolderGraph` 的分区复用 `globalGraph` 的 `repelForce`、`centerForce`、
 `linkDistance`、`enableRadial`，以及全局图谱的速度衰减、冷却和拖拽重启参数。
-`depth` 和聚合关系仍来自文件夹页的局部 JSON 与共享聚合规则。
+成员范围来自文件夹集合 JSON，聚合关系来自共享聚合规则。
 径向力的目标半径随画布尺寸计算，并在展开、收起全过程持续启用；不固定分区坐标。
 普通内容页的 `localGraph` 参数独立生效。
 

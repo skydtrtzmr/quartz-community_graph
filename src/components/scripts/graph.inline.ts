@@ -70,6 +70,7 @@ if (initialized) {
 // ============ 类型定义 ============
 interface LocalGraphData {
   version: number
+  view?: "folder"
   expansionMode?: "on-demand"
   center: SimpleSlug
   depth: number
@@ -424,7 +425,8 @@ function main() {
       for (const obj of this.pool) {
         this.resetFn(obj)
         if (typeof (obj as any).destroy === "function") {
-          ;(obj as any).destroy({ children: true, texture: true, baseTexture: true })
+          // Graphics owns its context; Pixi's text/white textures are shared.
+          ;(obj as any).destroy()
         }
       }
       this.pool = []
@@ -464,6 +466,14 @@ function main() {
     fullSlug: FullSlug,
     generation: number,
   ): Promise<() => void> {
+    const startedAt = performance.now()
+    let phaseStartedAt = startedAt
+    const timings: Record<string, number> = {}
+    const markPhase = (name: string) => {
+      const now = performance.now()
+      timings[name] = Math.round((now - phaseStartedAt) * 10) / 10
+      phaseStartedAt = now
+    }
     console.log("[renderGraph] start")
     const slug = simplifySlug(fullSlug)
     const visited = getVisited()
@@ -523,6 +533,7 @@ function main() {
       selection = await response.json() as GraphSelection
       coreMinLinks = resolveCoreMinLinks(selection.coreMinLinks)
     }
+    markPhase("selection")
     const excludeUnlinkedGlobalNodes = depth < 0 && resolveCoreMinLinks(coreMinLinks) > 0
 
 
@@ -577,10 +588,12 @@ function main() {
       if (!checkGeneration(generation)) return () => {}
     }
 
-    // 从 data-precompute-depth 获取预计算深度（统一配置，与 graphLocal.tsx 使用相同的 cfg.graph.localDepth）
+    markPhase("aggregation")
+    // Folder collections carry their own scope and never use the file-page BFS depth.
     const precomputeDepth = parseInt(graph.dataset["precomputeDepth"] ?? "1")
 
-    const usePrecomputed = depth > 0 && depth <= precomputeDepth
+    const isFolderGraph = graph.dataset.graphView === "folder" && depth > 0
+    const usePrecomputed = isFolderGraph || (depth > 0 && depth <= precomputeDepth)
 
     // 优化：如果是局部图谱且使用预计算，先尝试加载预计算 JSON
     // 如果成功，直接使用预计算数据，跳过 fetchData 和 BFS
@@ -593,7 +606,7 @@ function main() {
         if (!checkGeneration(generation)) return () => {}
         const pdata = await fetchCachedLocalGraph(fullSlug, basePath, localGraphUrl)
         if (!checkGeneration(generation)) return () => {}
-        if (pdata && (pdata as any).depth >= depth) {
+        if (pdata && (isFolderGraph && pdata.view === "folder" || pdata.depth >= depth)) {
           localGraphData = pdata as LocalGraphData
           const visibleNodes = filterGraphContent(new Map(Object.entries(localGraphData.nodes)))
           localGraphData = {
@@ -678,6 +691,8 @@ function main() {
 
     // 确保 data 已定义（TypeScript 智能推断）
     const contentData = data!
+    markPhase("loadAndParseGraph")
+    graph.dataset.rawNodeCount = String(contentData.size || Object.keys(globalPrecomputed?.nodeDetails ?? {}).length)
     const isGlobalGraph = depth < 0
     const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
     const expandBatchSize = resolveExpandBatchSize(rawExpandBatchSize)
@@ -1196,7 +1211,7 @@ function main() {
           }
           const endTime = performance.now()
           console.log(
-            `[Graph] Precomputed JSON rendered: ${neighbourhood.size} nodes, ${links.length} edges in ${(endTime - startTime).toFixed(2)}ms`,
+            `[Graph] Raw graph prepared: ${neighbourhood.size} nodes, ${links.length} edges in ${(endTime - startTime).toFixed(2)}ms (not rendered counts)`,
           )
         } else {
           console.log(`[Graph] ===== USING CONTENTINDEX BFS (depth: ${depth}) =====`)
@@ -1686,6 +1701,11 @@ function main() {
     // ===== 检查点 3: Pixi 初始化前 =====
     if (!checkGeneration(generation)) return () => {}
 
+    markPhase("prepareGraph")
+    graph.dataset.visibleNodeCount = String(graphData.nodes.length)
+    graph.dataset.visibleEdgeCount = String(graphData.links.length)
+    console.debug(`[Graph] Initial visible graph (${graphView}): ${graphData.nodes.length} nodes, ${graphData.links.length} edges`)
+
     console.log("[DEBUG] 开始初始化 D3 simulation")
     const dynamics = simulationSettings(graphView)
     const simulation: Simulation<NodeData, LinkData> = createGraphSimulation(
@@ -1985,6 +2005,7 @@ function main() {
     tweens.clear()
 
     console.log("[DEBUG] 开始初始化 Pixi Application")
+    markPhase("initializeSimulation")
     const app = new Application()
     await app.init({
       width,
@@ -1998,11 +2019,12 @@ function main() {
       eventMode: "static",
     })
     console.log("[DEBUG] Pixi Application 初始化完成")
+    markPhase("initializePixi")
 
     // ===== 检查点 4: Pixi 初始化完成后 =====
     if (!checkGeneration(generation)) {
       simulation.stop()
-      app.destroy()
+      app.destroy({ removeView: true }, { children: true, context: true })
       return () => {}
     }
 
@@ -3469,6 +3491,7 @@ function main() {
     }
 
     let animationId: number | null = null
+    let firstFrame = true
 
     // 虚线绘制辅助函数（用于聚合边）
     function drawDashedLine(gfx: Graphics, x1: number, y1: number, x2: number, y2: number) {
@@ -3648,6 +3671,18 @@ function main() {
 
       tweens.forEach((t) => t.update(time))
       app.renderer.render(stage)
+      if (firstFrame) {
+        firstFrame = false
+        markPhase("createObjectsAndFirstRender")
+        timings.total = Math.round((performance.now() - startedAt) * 10) / 10
+        graph.dataset.graphTimings = JSON.stringify(timings)
+        console.debug(`[GraphTiming] ${slug} (${graphView})`, {
+          milliseconds: timings,
+          rawNodes: Number(graph.dataset.rawNodeCount),
+          visibleNodes: graphData.nodes.length,
+          visibleEdges: graphData.links.length,
+        })
+      }
       animationId = requestAnimationFrame(animate)
     }
 
@@ -3659,6 +3694,7 @@ function main() {
     console.log("[DEBUG] renderGraph 函数即将返回")
 
     return () => {
+      if (appDestroyed) return
       console.debug(`[Graph] Tearing down graph for ${slug}`)
       appDestroyed = true
       if (animationId !== null) {
@@ -3673,8 +3709,9 @@ function main() {
       graphicsPool.clear()
       textPool.clear()
       linkGraphicsPool.clear()
-      app.stage.destroy({ children: true, texture: true })
-      app.destroy({ removeView: true })
+      // Application owns the stage. Destroy it once and leave shared textures
+      // under Pixi's ownership; destroy the graph's Graphics contexts explicitly.
+      app.destroy({ removeView: true }, { children: true, context: true })
       console.debug(`[Graph] Pixi app and resources destroyed for ${slug}`)
     }
   }
@@ -3754,6 +3791,7 @@ function main() {
     const slug = e.detail.url
     // prescript.js 在 <head> 中执行，此时 body 的 data-slug 可能尚未解析
     if (!slug) return
+    const navigationGeneration = renderGeneration
     addToVisited(simplifySlug(slug))
     ensureFetchData()
 
@@ -3818,10 +3856,11 @@ function main() {
     }
 
     await renderLocalGraph()
+    if (!checkGeneration(navigationGeneration)) return
     console.log("[DEBUG] renderLocalGraph 执行完成，所有本地图谱已渲染")
 
     const handleThemeChange = () => {
-      void renderLocalGraph()
+      onDimensionOrderChanged()
     }
     document.addEventListener("themechange", handleThemeChange)
     window.addCleanup(() => document.removeEventListener("themechange", handleThemeChange))

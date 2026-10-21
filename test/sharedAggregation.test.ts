@@ -122,6 +122,14 @@ describe("shared local aggregation", () => {
     expect(result.groups[0].members).toEqual(tasks);
   });
 
+  it("keeps linked dimension pages visible without requiring a source-folder context", () => {
+    const dimension = note("_dimensions/status/完成");
+    const tasks = [note("任务/a", { status: "完成" }), note("任务/b", { status: "完成" })];
+    const result = groupShared([dimension, ...tasks], artifact, identity);
+    expect(result.leaves).toEqual([dimension]);
+    expect(result.groups[0].members).toEqual(tasks);
+  });
+
   it("rejects bad protocols instead of silently using legacy options", () => {
     expect(readSharedAggregation(artifact)).toBe(artifact);
     // minGroupSize 允许 1（每个取值都成组），0 仍非法

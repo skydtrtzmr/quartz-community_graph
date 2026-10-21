@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest"
 import type { SimpleSlug } from "@quartz-community/types"
 import { descendantChildrenOf, directChildrenOf, djb2Hash, getLocalGraphPath } from "../src/emitters/graphLocal"
 import { filterGraphContent } from "../src/util/contentIndex"
+import type { ContentDetails } from "../src/util/contentIndex"
+import { buildFolderGraph } from "../src/emitters/graphFolder"
+import { GraphLocalEmitter } from "../src/emitters/graphLocal"
+import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import type { BuildCtx, ChangeEvent, ProcessedContent, StaticResources } from "@quartz-community/types"
 
 /**
  * 运行时读取端（graph3.inline.ts）使用的算法副本。
@@ -100,5 +107,97 @@ describe("folder graph membership", () => {
       "项目/核心项目/2025/计划",
       "项目/核心项目/2025/总结",
     ])
+  })
+})
+
+describe("folder collection data", () => {
+  const make = (id: string, links: string[] = [], tags: string[] = []) => ({
+    slug: id, filePath: `${id.replace(/\/$/, "/index")}.md`, title: id,
+    links, tags, content: "body must not be shipped", frontmatter: { customCategory: "custom" },
+  }) as unknown as ContentDetails
+
+  it("keeps descendants and direct incoming/outgoing context, without recursive context or synthetic center edges", () => {
+    const index = new Map<string, ContentDetails>([
+      ["课程/", make("课程/")],
+      ["课程/子/", make("课程/子/")],
+      ["课程/子/a", make("课程/子/a", ["案例/b", "课程/c", "案例/b"], ["tag"])],
+      ["课程/c", make("课程/c")],
+      ["案例/b", make("案例/b", ["设备/deep", "员工/incoming"])],
+      ["员工/incoming", make("员工/incoming", ["课程/c"])],
+      ["设备/deep", make("设备/deep")],
+      ["课程占位", make("课程占位")],
+    ])
+    const graph = buildFolderGraph("课程/" as SimpleSlug, index as Map<SimpleSlug, ContentDetails>, { "课程": "课程" }, () => "relation")
+    expect(graph.view).toBe("folder")
+    expect(Object.keys(graph.nodes).sort()).toEqual(["课程/子/a", "课程/c", "案例/b", "员工/incoming", "tags/tag"].sort())
+    expect(graph.edges.map(({ source, target }) => [source, target])).toEqual([
+      ["课程/子/a", "案例/b"], ["课程/子/a", "课程/c"], ["课程/子/a", "tags/tag"], ["员工/incoming", "课程/c"],
+    ])
+    expect(graph.edges[0].sourceField).toBe("relation")
+    expect(Object.values(graph.nodes).every(node => node.content === "")).toBe(true)
+    expect(graph.nodes["课程/子/a" as SimpleSlug].frontmatter?.customCategory).toBe("custom")
+    expect(graph.nodes["案例/b" as SimpleSlug].links).toEqual([])
+    expect(index.get("案例/b")?.links).toEqual(["设备/deep", "员工/incoming"])
+    expect(index.get("课程/c")?.content).toBe("body must not be shipped")
+  })
+
+  it("retains isolated members and excludes directory pages and placeholders", () => {
+    const index = new Map<string, ContentDetails>([
+      ["课程/", make("课程/")], ["课程/子/", make("课程/子/")],
+      ["课程/子/a", make("课程/子/a")],
+      ["课程/ghost", { ...make("课程/ghost"), virtualNode: true }],
+    ])
+    const graph = buildFolderGraph("课程/" as SimpleSlug, index as Map<SimpleSlug, ContentDetails>, {}, () => undefined)
+    expect(Object.keys(graph.nodes)).toEqual(["课程/子/a"])
+    expect(graph.edges).toEqual([])
+  })
+
+  it("incremental add, relation edit, category edit, move and delete agree with a full build", async () => {
+    const output = await mkdtemp(join(tmpdir(), "folder-collection-"))
+    try {
+      const ctx = { argv: { output }, cfg: { configuration: {} } } as unknown as BuildCtx
+      const resources = { css: [], js: [], additionalHead: [] } as StaticResources
+      const emitter = GraphLocalEmitter({ localDepth: 3 })
+      const index: Record<string, ContentDetails> = {
+        "课程/": make("课程/"), "其他/": make("其他/"),
+        "课程/a": make("课程/a", ["案例/b"]),
+        "案例/b": make("案例/b", ["设备/deep"]), "设备/deep": make("设备/deep"),
+      }
+      const content = () => Object.values(index).map(details => [null, { data: {
+        ...details, relativePath: details.filePath, text: details.content,
+      } }]) as unknown as ProcessedContent[]
+      const consume = async (result: ReturnType<typeof emitter.emit> | null) => {
+        const value = await result
+        if (!value) return
+        if (Symbol.asyncIterator in value) for await (const _ of value) { /* drain */ }
+      }
+      const readGraph = async (folder: string) => {
+        const data = JSON.parse(await readFile(join(output, "graph/local", `${getLocalGraphPath(folder as SimpleSlug)}.json`), "utf8"))
+        delete data.generatedAt
+        return data
+      }
+      await mkdir(join(output, "static"), { recursive: true })
+      await consume(emitter.emit(ctx, content(), resources))
+      const update = async (ids: string[], mutate: () => void) => {
+        mutate()
+        await writeFile(join(output, "static/contentIndex.json"), JSON.stringify(index))
+        const events = ids.map(id => ({ type: index[id] ? "change" : "delete", path: `${id}.md`, file: { data: { slug: id } } })) as unknown as ChangeEvent[]
+        await consume(emitter.partialEmit!(ctx, content(), resources, events))
+        const incremental = await Promise.all([readGraph("课程/"), readGraph("其他/")])
+        await consume(emitter.emit(ctx, content(), resources))
+        expect(incremental).toEqual(await Promise.all([readGraph("课程/"), readGraph("其他/")]))
+      }
+      await update(["课程/new"], () => { index["课程/new"] = make("课程/new") })
+      await update(["案例/b"], () => { index["案例/b"].links = ["课程/new" as SimpleSlug] })
+      await update(["课程/a"], () => { index["课程/a"].frontmatter = { customCategory: "changed" } })
+      await update(["课程/a", "其他/a"], () => {
+        delete index["课程/a"]
+        index["其他/a"] = make("其他/a", ["案例/b"])
+      })
+      await update(["课程/new"], () => { delete index["课程/new"] })
+      expect(await readGraph("课程/")).toMatchObject({ view: "folder", nodes: {}, edges: [] })
+    } finally {
+      await rm(output, { recursive: true, force: true })
+    }
   })
 })
