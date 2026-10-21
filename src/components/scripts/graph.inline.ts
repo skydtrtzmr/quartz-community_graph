@@ -36,7 +36,7 @@ import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/ag
 import { focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes } from "./views"
 import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
 import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
-import { indexGraphLinks } from "./graphLinkIndex"
+import { indexGraphLinks, projectLocalGraph } from "./graphLinkIndex"
 import { createOnDemandCache } from "./onDemandCache"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
@@ -781,16 +781,26 @@ function main() {
       ((selection?.linkCounts[b.id] ?? nodeLinkCount.get(b.id) ?? 0) -
         (selection?.linkCounts[a.id] ?? nodeLinkCount.get(a.id) ?? 0)) ||
       compareListingValue(a, b) || collator.compare(String(a.id), String(b.id))
+    let localContextOrder = new Map<string, number>()
     const expansionPages = new ExpansionPages<NodeData, LinkData>(expandBatchSize, (a, b) =>
       Number(b.id === slug) - Number(a.id === slug) ||
+      (graphView === "local" ? Number(localContextOrder.has(a.id)) - Number(localContextOrder.has(b.id)) : 0) ||
+      (graphView === "local" && localContextOrder.has(a.id) && localContextOrder.has(b.id)
+        ? localContextOrder.get(a.id)! - localContextOrder.get(b.id)! : 0) ||
       Number(!!b.isRegion || !!b.isAggregation) - Number(!!a.isRegion || !!a.isAggregation) ||
       compareVisibleFiles(a, b))
     const initialPageId = "__graph_initial__"
+    const localContextPageId = "__local_context__"
     const updateVisibleCount = () => {
       graph.dataset.visibleFileCount = String(graphData.nodes.filter(isVisibleFile).length)
       graph.dataset.visibleNodeCount = String(graphData.nodes.length)
       graph.dataset.initialNodeLimit = String(initialNodeLimit)
       graph.dataset.totalFileCount = String(new Set(allNodes.filter(isVisibleFile).map(node => node.id)).size)
+      if (graphView === "local") {
+        graph.dataset.localContextCount = String(graphData.nodes.filter(node => localContextIds.has(node.id)).length)
+        graph.dataset.disconnectedNodeCount = String(graphData.nodes.length -
+          projectLocalGraph(slug, graphData.nodes, graphData.links, [], []).nodes.length)
+      }
     }
     let allLinks: LinkData[] = []
 
@@ -1646,12 +1656,32 @@ function main() {
       }
     } // end else (!globalPrecomputed)
 
+    const directLocalIds = new Set<string>([slug])
+    if (graphView === "local") {
+      for (const link of incidentLinks([slug])) {
+        directLocalIds.add(link.source.id)
+        directLocalIds.add(link.target.id)
+      }
+    }
+    const localContextNodes = graphView === "local"
+      ? allNodes.filter(node => !directLocalIds.has(node.id) && !node.isAggregation && !node.isRegion)
+      : []
+    const localContextIds = new Set(localContextNodes.map(node => node.id))
+    let initialLocalContext = new Set<string>()
+    if (graphView === "local") {
+      const projected = projectLocalGraph(slug, graphData.nodes, graphData.links, localContextNodes, allLinks)
+      graphData = { nodes: projected.nodes, links: projected.links }
+      localContextOrder = new Map(projected.context.map((node, index) => [node.id, index]))
+      initialLocalContext = new Set(projected.context.map(node => node.id))
+    }
+
     // Limit the initial screen before creating Pixi objects or the simulation.
     // Later user-triggered expansions use their own batch size, without this ceiling.
     if (graphData.nodes.length > initialNodeLimit) {
       const first = expansionPages.open(initialPageId, [], graphData.nodes, graphData.links, loadBatchSize, initialNodeLimit)
       graphData = { nodes: first.nodes, links: first.links }
     }
+    const contextPendingInInitialPage = new Set([...initialLocalContext].filter(id => !graphData.nodes.some(node => node.id === id)))
 
     const focusIds = focusNodeIds(
       graphView,
@@ -2375,6 +2405,62 @@ function main() {
     // ===== 展开/收起边缘节点 =====
     const expandedNodeIds = new Set<SimpleSlug>()
 
+    function syncLocalContext(addBudget = 0) {
+      if (graphView !== "local") return
+      const pool = localContextNodes.filter(node => !contextPendingInInitialPage.has(node.id))
+      const projected = projectLocalGraph(slug, graphData.nodes, graphData.links, pool, allLinks)
+      const reachable = new Set(projected.context.map(node => node.id))
+      const removeIds = new Set(graphData.nodes.filter(node => localContextIds.has(node.id) && !reachable.has(node.id)).map(node => node.id))
+      if (removeIds.size) {
+        tweens.forEach(tween => tween.stop())
+        tweens.clear()
+      }
+      for (let i = nodeRenderData.length - 1; i >= 0; i--) {
+        const rd = nodeRenderData[i]
+        if (!removeIds.has(rd.simulationData.id)) continue
+        graphicsPool.release(rd.gfx)
+        textPool.release(rd.label)
+        rd.badge?.destroy()
+        rd.badgeText?.destroy()
+        rd.countLabel?.destroy()
+        rd.aggBg?.destroy()
+        nodeRenderData.splice(i, 1)
+      }
+      graphData.nodes = graphData.nodes.filter(node => !removeIds.has(node.id))
+      if (hoveredNodeId && removeIds.has(hoveredNodeId)) updateHoverInfo(null)
+      const visible = new Set(graphData.nodes.map(node => node.id))
+      // BFS order ensures a context's visible predecessor is added first.
+      for (const node of projected.context.filter(node => !visible.has(node.id)).slice(0, addBudget)) {
+        visible.add(node.id)
+        graphData.nodes.push(node)
+        nodeRenderData.push(createNodeRenderObject(node))
+      }
+      const links = projected.links.filter(link => visible.has(link.source.id) && visible.has(link.target.id))
+      const keyFor = (link: LinkData) => JSON.stringify([link.source.id, link.target.id, link.sourceField])
+      const wanted = new Set(links.map(keyFor))
+      for (let i = linkRenderData.length - 1; i >= 0; i--) {
+        if (wanted.has(keyFor(linkRenderData[i].simulationData))) continue
+        linkGraphicsPool.release(linkRenderData[i].gfx)
+        linkRenderData[i].label?.destroy()
+        linkRenderData.splice(i, 1)
+      }
+      const existingLinks = new Set(linkRenderData.map(rd => keyFor(rd.simulationData)))
+      for (const link of links) {
+        if (!existingLinks.has(keyFor(link))) linkRenderData.push(createLinkRenderObject(link))
+      }
+      graphData.links = links
+      const loadedContext = projected.context.filter(node => visible.has(node.id))
+      const pendingContext = projected.context.filter(node => !visible.has(node.id))
+      if (pendingContext.length) {
+        const ordered = [...loadedContext, ...pendingContext]
+        localContextOrder = new Map(ordered.map((node, index) => [node.id, index]))
+        // Context has its own ordinary-node queue; aggregation progress still
+        // counts actual members, and automatic disclosure remains bounded.
+        expansionPages.open(localContextPageId, graphData.nodes, ordered, projected.links,
+          loadBatchSize, loadedContext.length)
+      } else expansionPages.close(localContextPageId)
+    }
+
     function expandNode(nodeId: SimpleSlug) {
       if (expandedNodeIds.has(nodeId)) return
 
@@ -2927,6 +3013,7 @@ function main() {
         }
       }
 
+      syncLocalContext(loadBatchSize)
       renderLabels()
 
       simulation.nodes(graphData.nodes)
@@ -3232,6 +3319,8 @@ function main() {
         }
       }
 
+      syncLocalContext()
+      renderLabels()
       simulation.nodes(graphData.nodes)
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
       // 收起时用较高 alpha 重新收敛，避免节点停留在展开时的远距离位置
@@ -3257,7 +3346,8 @@ function main() {
       const visible = new Set(graphData.nodes.map(node => String(node.id)))
       const items: ExpansionControlItem[] = []
       for (const [id, progress] of expansionPages.entries()) {
-        if (id !== initialPageId && (!visible.has(id) || !expandedNodeIds.has(id as SimpleSlug))) {
+        const rootQueue = id === initialPageId || id === localContextPageId
+        if (!rootQueue && (!visible.has(id) || !expandedNodeIds.has(id as SimpleSlug))) {
           expansionPages.close(id)
           continue
         }
@@ -3272,7 +3362,7 @@ function main() {
           if (ancestor) ancestors.unshift(ancestor.text)
           ancestorId = aggToCoreMap.get(ancestorId)
         }
-        const fullLabel = id === initialPageId ? "当前图谱" : parent?.text ?? id
+        const fullLabel = id === initialPageId ? "当前图谱" : id === localContextPageId ? "关联节点" : parent?.text ?? id
         const label = aggNodeInfoMap.get(id as SimpleSlug)?.groupKey
           || fullLabel.replace(/^[^:：]+[:：]\s*/, "")
         items.push({ id, label, path: [...ancestors, fullLabel].join(" / "),
@@ -3282,10 +3372,11 @@ function main() {
       pagination.update(items, graphData.nodes.length, initialNodeLimit)
     }
     function loadExpansionPage(id: SimpleSlug) {
-      const parent = graphData.nodes.find(node => node.id === id)
-      if (id !== initialPageId && (!parent || !expandedNodeIds.has(id))) return
+      const parent = graphData.nodes.find(node => node.id === (id === localContextPageId ? slug : id))
+      if (id !== initialPageId && id !== localContextPageId && (!parent || !expandedNodeIds.has(id))) return
       const page = expansionPages.next(id, graphData.nodes)
       for (const [index, node] of page.nodes.entries()) {
+        contextPendingInInitialPage.delete(node.id)
         const angle = index * Math.PI * 2 / Math.max(1, page.nodes.length)
         node.x = (parent?.x ?? 0) + Math.cos(angle) * 80
         node.y = (parent?.y ?? 0) + Math.sin(angle) * 80
@@ -3306,6 +3397,7 @@ function main() {
         for (const child of page.nodes) children.add(child.id)
         expandedAggChildren.set(id, children)
       }
+      syncLocalContext(id === localContextPageId ? 0 : loadBatchSize)
       renderLabels()
       simulation.nodes(graphData.nodes)
       simulation.force("link", createGraphLinkForce(graphData.links, graphView, linkDistance))
@@ -3313,6 +3405,7 @@ function main() {
       updateExpansionControls()
       updateVisibleCount()
     }
+    syncLocalContext()
     updateExpansionControls()
     updateVisibleCount()
 
