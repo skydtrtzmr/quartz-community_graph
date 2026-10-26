@@ -9,7 +9,7 @@ import type {
 import { emitGraphSelection } from "./graphSelection"
 import { GraphLocalEmitter } from "./graphLocal"
 import { GraphGlobalEmitter } from "./graphGlobal"
-import type { GraphProOptions } from "../options"
+import { resolveGraphViewConfig, type GraphProOptions } from "../options"
 
 /** 把 `Promise<FilePath[]> | AsyncGenerator<FilePath>` 统一成可 yield* 的异步迭代器 */
 async function* drain(
@@ -36,14 +36,15 @@ export default function graphProEmitter(
 ): QuartzEmitterPluginInstance {
   const local = GraphLocalEmitter({
     precomputeLocal: options.graph?.precomputeLocal ?? true,
-    localDepth: options.graph?.localDepth ?? 1,
+    localDepth: options.configVersion === 2
+      ? resolveGraphViewConfig(options, "local").depth : options.graph?.localDepth ?? 1,
   })
 
   const globalOpts = options.globalGraph ?? {}
   const global = GraphGlobalEmitter({
     // 显式排除掉纯组件侧字段不必要，GraphGlobal 只读取自己认识的键
     ...globalOpts,
-    coreMinLinks: options.graph?.coreMinLinks,
+    coreMinLinks: resolveGraphViewConfig(options, "global").coreMinLinks,
     enabled: globalOpts.enabled ?? true,
   })
 
@@ -51,7 +52,7 @@ export default function graphProEmitter(
     name: "GraphPro",
 
     async *emit(ctx: BuildCtx, content: ProcessedContent[], resources: StaticResources) {
-      yield await emitGraphSelection(ctx, options.graph?.coreMinLinks)
+      yield await emitGraphSelection(ctx, resolveGraphViewConfig(options, "global").coreMinLinks)
       // 局部图谱在前、全局图谱在后：与 v4 的 emitter 顺序保持一致
       yield* drain(local.emit(ctx, content, resources))
       yield* drain(global.emit(ctx, content, resources))
@@ -63,7 +64,7 @@ export default function graphProEmitter(
       resources: StaticResources,
       changeEvents: ChangeEvent[],
     ) {
-      yield await emitGraphSelection(ctx, options.graph?.coreMinLinks)
+      yield await emitGraphSelection(ctx, resolveGraphViewConfig(options, "global").coreMinLinks)
       const localResult = local.partialEmit?.(ctx, content, resources, changeEvents)
       if (localResult) {
         yield* drain(localResult)

@@ -9,6 +9,7 @@ import { getBasePath } from "../util/basePath";
 import style from "./styles/graph.scss";
 import type { AggregationRule, CoreNodeFilterConfig } from "../util/aggregation";
 import { resolveGraphGrouping } from "../util/graphGrouping";
+import { resolveGraphViewConfig, type GraphProOptions } from "../options";
 
 export interface D3Config {
   drag: boolean;
@@ -72,48 +73,7 @@ export type GraphUserConfig = Omit<D3Config, "aggregation" | "regionRules" | "co
   folders?: string[];
 };
 
-export interface GraphOptions {
-  /** 构建期预计算开关（由 emitter 消费；localDepth 同时决定运行时的 usePrecomputed 判定） */
-  graph?: {
-    precomputeLocal?: boolean;
-    localDepth?: number;
-    coreMinLinks?: number;
-    expandBatchSize?: number;
-    maxVisibleNodes?: number;
-    loadBatchSize?: number;
-  };
-  localGraph?: Partial<GraphUserConfig>;
-  /** 文件夹页图谱布局覆盖；未配置时沿用全局图谱的力参数。 */
-  folderGraph?: Pick<Partial<GraphUserConfig>, "linkDistance">;
-  globalGraph?: Partial<GraphUserConfig>;
-}
-
-const defaultOptions: GraphOptions = {
-  graph: {
-    precomputeLocal: true,
-    localDepth: 1,
-  },
-  localGraph: {
-    drag: true,
-    zoom: true,
-    depth: 1,
-    scale: 1.1,
-    repelForce: 0.5,
-    centerForce: 0.3,
-    linkDistance: 30,
-    fontSize: 0.6,
-    opacityScale: 1,
-    showTags: true,
-    removeTags: [],
-    focusOnHover: false,
-    enableRadial: false,
-    showArrows: true,
-    showBadge: false,
-    startCollapsed: false,
-    showAggregatedNodeLinks: false,
-    countLabelMaxDisplay: 120,
-  },
-};
+export type GraphOptions = GraphProOptions;
 
 export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "local") => {
   const Graph: QuartzComponent = ({ displayClass, cfg }: QuartzComponentProps) => {
@@ -122,20 +82,14 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
     const siteRootDepth = (cfg as unknown as { aggregation?: { root?: { depth?: number } } })
       .aggregation?.root?.depth;
     const grouping = resolveGraphGrouping({ folderDepth: siteRootDepth });
-    const localGraph = {
-      ...defaultOptions.localGraph,
-      aggregation: grouping.aggregation,
-      ...userOpts?.localGraph,
-      coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0,
-      expandBatchSize: userOpts?.graph?.expandBatchSize,
-      maxVisibleNodes: userOpts?.graph?.maxVisibleNodes,
-      loadBatchSize: userOpts?.graph?.loadBatchSize,
-    };
+    const localGraph = { ...resolveGraphViewConfig(userOpts, view), aggregation: grouping.aggregation };
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed = depth > 0 && depth <= precomputeDepth，
     // 必须与 emitter 的 options.graph.localDepth 保持一致
-    const precomputeDepth = userOpts?.graph?.localDepth ?? localGraph.depth ?? 1;
+    const precomputeDepth = userOpts?.configVersion === 2
+      ? resolveGraphViewConfig(userOpts, "local").depth
+      : userOpts?.graph?.localDepth ?? localGraph.depth ?? 1;
 
     return (
       <div class={classNames(displayClass, "graph", view === "folder" ? "folder-graph" : undefined)}>

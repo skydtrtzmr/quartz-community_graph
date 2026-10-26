@@ -82,26 +82,6 @@ interface LocalGraphData {
   matched?: Array<{ slug: string; scope: string }>
 }
 
-/**
- * 维度值页图谱的默认调参（镜像 Graph.tsx 的 localGraph 默认值）。
- * 维度页容器只声明 `data-dimension-graph` + 产物地址，其余 dataset 由脚本补齐。
- */
-const DIMENSION_GRAPH_DEFAULTS = {
-  depth: 1,
-  scale: 1.1,
-  repelForce: 0.38,
-  centerForce: 0.3,
-  linkDistance: 72,
-  fontSize: 0.75,
-  opacityScale: 1,
-  showTags: false,
-  removeTags: [],
-  focusOnHover: false,
-  enableRadial: true,
-  drag: true,
-  zoom: true,
-}
-
 /** 拼接 basePath 与相对产物地址（basePath 允许带或不带前导斜杠） */
 function joinArtifactUrl(basePath: string, path: string): string {
   const prefix = basePath ? (basePath.startsWith("/") ? basePath : `/${basePath}`) : ""
@@ -517,7 +497,9 @@ function main() {
 
 
     // 全局图谱默认硬上限 100；局部图谱不设上限
-    const coreNodeLimit = depth < 0 ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
+    const declaredView = graph.dataset.graphView ?? (graph.dataset.dimensionGraph !== undefined
+      ? "dimension" : depth < 0 ? "global" : "local")
+    const coreNodeLimit = declaredView === "global" ? (rawCoreNodeLimit ?? 100) : rawCoreNodeLimit
 
     // 约定：basePath 不带前导斜杠（Graph 组件用 getBasePath 去掉；注入宿主取自 body[data-basepath] 会带），
     // 这里统一裁掉，避免拼出 `//<域>/graph/...` 这类 404 路径
@@ -527,14 +509,14 @@ function main() {
     const localGraphUrl = graph.dataset["localGraphUrl"] || undefined
     const isDimensionGraph = graph.dataset["dimensionGraph"] !== undefined
     let selection: GraphSelection | undefined
-    if (depth < 0 || isDimensionGraph || graph.dataset.graphView === "folder") {
+    if (declaredView === "global" || declaredView === "dimension" || declaredView === "folder") {
       const response = await fetch(`${basePath ? `/${basePath}` : ""}/graph/selection.json`)
       if (!response.ok) throw new Error(`[Graph] selection.json: HTTP ${response.status}; rebuild domain`)
       selection = await response.json() as GraphSelection
-      coreMinLinks = resolveCoreMinLinks(selection.coreMinLinks)
+      coreMinLinks = resolveCoreMinLinks(coreMinLinks ?? selection.coreMinLinks)
     }
     markPhase("selection")
-    const excludeUnlinkedGlobalNodes = depth < 0 && resolveCoreMinLinks(coreMinLinks) > 0
+    const excludeUnlinkedGlobalNodes = declaredView === "global" && resolveCoreMinLinks(coreMinLinks) > 0
 
 
     const dimensionScope = isDimensionGraph
@@ -662,7 +644,7 @@ function main() {
       if (!checkGeneration(generation)) return () => {}
 
       // [GRAPH3] 全局图谱优先加载预计算的 graphGlobal.json
-      if (depth < 0) {
+      if (declaredView === "global") {
         console.log("[GRAPH3] 全局图谱模式，尝试加载 graphGlobal.json...")
         globalPrecomputed = await fetchGlobalGraphPrecomputed(basePath)
       }
@@ -693,8 +675,8 @@ function main() {
     const contentData = data!
     markPhase("loadAndParseGraph")
     graph.dataset.rawNodeCount = String(contentData.size || Object.keys(globalPrecomputed?.nodeDetails ?? {}).length)
-    const isGlobalGraph = depth < 0
-    const graphView = graphViewOf(depth, isDimensionGraph, graph.dataset["graphView"])
+    const graphView = graphViewOf(depth, isDimensionGraph, declaredView)
+    const isGlobalGraph = graphView === "global"
     const expandBatchSize = resolveExpandBatchSize(rawExpandBatchSize)
     const initialNodeLimit = resolveMaxVisibleNodes(rawMaxVisibleNodes)
     const loadBatchSize = resolveLoadBatchSize(rawLoadBatchSize)
@@ -1362,7 +1344,7 @@ function main() {
       if ((graphView === "folder" || graphView === "dimension") && selection) {
         const candidates = focusNodeIds(graphView, allNodes, slug, localGraphData?.matched ?? [],
           id => !!contentData.get(id as SimpleSlug)?.filePath)
-        const scoped = selectScope(candidates, selection.linkCounts, selection.coreMinLinks,
+        const scoped = selectScope(candidates, selection.linkCounts, resolveCoreMinLinks(coreMinLinks),
           allLinks.map(link => ({ source: link.source.id, target: link.target.id })))
         selectedCoreIds = scoped.coreIds
         allNodes = allNodes.filter(node => scoped.retainedIds.has(node.id))
@@ -3840,20 +3822,15 @@ function main() {
    */
   function prepareDimensionContainers() {
     const containers = document.querySelectorAll<HTMLElement>("[data-dimension-graph]")
-    const sharedGraphConfig = document.querySelector<HTMLElement>(".global-graph-container")?.dataset.globalCfg
-    const sharedCfg = sharedGraphConfig ? (JSON.parse(sharedGraphConfig) as D3Config) : undefined
+    const config = document.querySelector<HTMLElement>(".graph-overlay-host")?.dataset.dimensionCfg
+    if (!config && containers.length) throw new Error("[Graph] dimension configuration host is missing")
     for (const container of containers) {
       if (container.classList.contains("graph-container")) continue
       const overrideUrl =
         container.dataset["dimensionGraphUrl"] || container.dataset["localGraphUrl"]
       container.classList.add("graph-container")
       container.dataset["basepath"] = document.body?.dataset?.basepath ?? ""
-      container.dataset["cfg"] = JSON.stringify({
-        ...DIMENSION_GRAPH_DEFAULTS,
-        expandBatchSize: sharedCfg?.expandBatchSize,
-        maxVisibleNodes: sharedCfg?.maxVisibleNodes,
-        loadBatchSize: sharedCfg?.loadBatchSize,
-      })
+      container.dataset["cfg"] = config!
       container.dataset["precomputeDepth"] = "1"
       container.dataset["sharedAggregation"] = "true"
       if (overrideUrl) container.dataset["localGraphUrl"] = overrideUrl

@@ -13,6 +13,7 @@ describe("graph view selection", () => {
     expect(graphViewOf(-1, false)).toBe("global");
     expect(graphViewOf(1, false)).toBe("local");
     expect(graphViewOf(1, false, "folder")).toBe("folder");
+    expect(graphViewOf(1, false, "global")).toBe("global");
     expect(graphViewOf(1, true, "folder")).toBe("dimension");
   });
 

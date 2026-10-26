@@ -4,7 +4,7 @@ import type {
   QuartzComponentProps,
 } from "@quartz-community/types";
 import { getBasePath } from "../util/basePath";
-import { DEFAULT_GLOBAL_GRAPH_CFG } from "../options";
+import { resolveGraphViewConfig } from "../options";
 import type { GraphOptions } from "./Graph";
 import { resolveGraphGrouping } from "../util/graphGrouping";
 import style from "./styles/global-graph-overlay.scss";
@@ -39,14 +39,15 @@ export default ((userOpts?: Partial<GraphOptions>) => {
       folderDepth: (cfg as unknown as { aggregation?: { root?: { depth?: number } } }).aggregation?.root
         ?.depth,
     });
-    const globalGraph = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...grouping, ...userGlobal, coreMinLinks: userOpts?.graph?.coreMinLinks ?? 0, expandBatchSize: userOpts?.graph?.expandBatchSize, maxVisibleNodes: userOpts?.graph?.maxVisibleNodes, loadBatchSize: userOpts?.graph?.loadBatchSize };
+    const globalGraph = { ...resolveGraphViewConfig(userOpts, "global"), ...grouping };
+    const dimensionGraph = resolveGraphViewConfig(userOpts, "dimension");
     // 传给 inline 脚本用于拼预计算 JSON 路径（与 Graph 组件同一套规则）
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed 需要；全局图谱 depth < 0 恒为预计算产物，这里与实际值保持一致
     const precomputeDepth = userOpts?.graph?.localDepth ?? 1;
 
     return (
-      <div class="graph-overlay-host">
+      <div class="graph-overlay-host" data-dimension-cfg={JSON.stringify(dimensionGraph)}>
         {/* 右上角「全局图谱」按钮：与阅读模式一样**构建期渲染**，常驻不闪（图标用地球，描边风格，
             与侧栏实心节点网络图标区分）。点击等价 Ctrl/⌘+G，交互由 graph.inline.ts 绑定。 */}
         <button class="graph-toggle" type="button" aria-label="全局图谱" title="全局图谱（Ctrl/⌘+G）">
@@ -68,6 +69,7 @@ export default ((userOpts?: Partial<GraphOptions>) => {
         <div class="global-graph-outer">
           <div
             class="global-graph-container"
+            data-graph-view="global"
             data-basepath={basePath}
             data-cfg={JSON.stringify(globalGraph)}
             data-global-cfg={JSON.stringify(globalGraph)}

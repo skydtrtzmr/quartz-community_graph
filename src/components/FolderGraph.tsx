@@ -4,7 +4,6 @@ import type {
   QuartzComponentProps,
 } from "@quartz-community/types"
 import Graph, { type GraphOptions } from "./Graph"
-import { DEFAULT_GLOBAL_GRAPH_CFG } from "../options"
 
 /** 系统目录：这些「目录页」不展示文件夹图谱 */
 const SYSTEM_FOLDERS = ["_dimensions", "tags"]
@@ -20,19 +19,7 @@ const SYSTEM_FOLDERS = ["_dimensions", "tags"]
  * 暂沿用 graph/local 的产物地址，由 view: folder 区分协议，便于已有站点迁移。
  */
 export default ((userOpts?: Partial<GraphOptions>) => {
-  const globalLayout = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...userOpts?.globalGraph }
-  // 分区和全局大区都可能互不相连，复用全局的力布局配置。
-  // 仅拷贝力参数：depth、核心筛选与聚合规则仍使用文件夹自己的数据路径。
-  const inner = Graph({
-    ...userOpts,
-    localGraph: {
-      ...userOpts?.localGraph,
-      repelForce: globalLayout.repelForce as number,
-      centerForce: globalLayout.centerForce as number,
-      linkDistance: userOpts?.folderGraph?.linkDistance ?? globalLayout.linkDistance as number,
-      enableRadial: globalLayout.enableRadial as boolean,
-    },
-  }, "folder")
+  const inner = Graph(userOpts, "folder")
   const FolderGraph: QuartzComponent = (props: QuartzComponentProps) => {
     const slug = (props.fileData.slug ?? "") as string
     // 与 folder-page 同一套匹配口径：目录页 slug 以 `/index` 结尾

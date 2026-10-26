@@ -8,7 +8,7 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 `graphGlobal.json` 的 `expansionMode: "on-demand"` 表示只预计算首屏大区，保留原始节点、边和邻接表，不预生成隐藏主体的邻居聚合。各类图谱目前仍加载完整数据 JSON，按需计算不等于分片下载；页面切换后会创建新的计算缓存。
 
-`options.graph.coreMinLinks` 统一筛选全局、文件夹页、维度值页图谱的核心文件，默认 `0`（包含孤立文件）。正整数表示业务域内最少真实文件连接数，不计目录、标签、维度聚合连线。低于门槛的文件仍可作为合格核心的直接邻居出现。普通文章局部图谱不受影响，列表及分类总数保留全量数据。构建产物 `graph/selection.json` 为三个视图提供相同的连接数。旧 `globalGraph.coreMinLinks` 请迁移到 `graph.coreMinLinks` 并重新构建；`filterOrphans` 已移除。
+`graph/selection.json` 提供业务域真实文件连接数；`configVersion: 2` 时 `coreMinLinks` 可在 `graphDefaults` 设置并由 `folderGraph`、`dimensionGraph`、`globalGraph` 各自覆盖。低于门槛的文件仍可作为合格主体的直接邻居出现，列表及分类总数保留全量数据。全局构建与渲染使用同一解析结果。缺少 `configVersion: 2` 的旧 YAML 继续按原 `graph.coreMinLinks` 解释。
 
 全局图谱：首屏仍为核心文件夹分区；分区内的核心集合按 `aggregation.json.resolved[目录]`
 取前 N 项逐级聚合。`options.globalGraph.coreAggregationMaxLevels` 为正整数，默认 2，
@@ -61,8 +61,8 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 后续待办：文件夹页的核心字段层数统一设计另行实施；`aggregation.json` 的字段对象
 改为字符串数组也单独迁移（需版本升级及各消费插件同步）。当前对象格式保留是兼容选择。
 
-`FolderGraph` 的分区复用 `globalGraph` 的 `repelForce`、`centerForce`、
-`linkDistance`、`enableRadial`，以及全局图谱的速度衰减、冷却和拖拽重启参数。
+`configVersion: 2` 时，`FolderGraph` 的力参数由 `folderGraph` 独立决定；未显式写出的值只取内置默认值或 `graphDefaults`，不继承其他视图。现有 YAML 已将旧配置的有效力参数写入 `folderGraph`。
+缺少版本标记的旧 YAML 仍保留文件夹继承全局力参数、其他显示项继承局部图的兼容行为。
 成员范围来自文件夹集合 JSON，聚合关系来自共享聚合规则。
 径向力的目标半径随画布尺寸计算，并在展开、收起全过程持续启用；不固定分区坐标。
 普通内容页的 `localGraph` 参数独立生效。
@@ -149,8 +149,12 @@ interface D3Config {
 }
 
 interface GraphOptions {
-  localGraph?: Partial<D3Config>; // Local page graph config
-  globalGraph?: Partial<D3Config>; // Global graph config
+  configVersion?: 2;
+  graphDefaults?: Partial<D3Config>; // Common interaction defaults
+  localGraph?: Partial<D3Config>; // File page
+  folderGraph?: Partial<D3Config>; // Folder collection
+  dimensionGraph?: Partial<D3Config>; // Dimension value collection
+  globalGraph?: Partial<D3Config>; // Global collection
 }
 ```
 
@@ -194,13 +198,22 @@ External libraries are loaded from CDN when the graph is first rendered.
 
 ### 分批展开与整体上限
 
-四种图谱（全局、文件夹、维度值、文件局部）共用插件的 `options.graph`：
+配置版本 2 将批次默认值放在 `graphDefaults`，四种视图可以各自覆盖：
 
 ```yaml
-graph:
+configVersion: 2
+graphDefaults:
   maxVisibleNodes: 500
   expandBatchSize: 20
   loadBatchSize: 100
+localGraph:
+  depth: 2
+folderGraph:
+  linkDistance: 125
+dimensionGraph:
+  linkDistance: 72
+globalGraph:
+  linkDistance: 150
 ```
 
 - `maxVisibleNodes` 沿用已有配置名，现表示**首屏节点预算**，包含文件、聚合、大区。首屏在创建 Pixi 对象和力导向模拟前截断；用户后续主动展开、加载更多可以超过这个数量。

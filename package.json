@@ -144,15 +144,18 @@
       }
     },
     "optionSchema": {
+      "configVersion": { "type": "integer", "enum": [2] },
       "graph": {
         "type": "object"
       },
+      "graphDefaults": { "type": "object" },
       "localGraph": {
         "type": "object"
       },
       "folderGraph": {
         "type": "object"
       },
+      "dimensionGraph": { "type": "object" },
       "globalGraph": {
         "type": "object"
       }

@@ -26,15 +26,16 @@ export interface CoreSelection<N extends CoreCandidate> {
   domainLinkCounts?: Map<string, number>;
 }
 
-/** The data attribute is explicit for folder pages; depth still decides global mode. */
+/** Explicit view wins; depth is retained only for pages built with older markup. */
 export function graphViewOf(
   depth: number,
   dimensionGraph: boolean,
   declaredView?: string,
 ): GraphView {
   if (dimensionGraph) return "dimension";
+  if (declaredView === "global" || declaredView === "folder" || declaredView === "local")
+    return declaredView;
   if (depth < 0) return "global";
-  if (declaredView === "folder") return "folder";
   return "local";
 }
 
