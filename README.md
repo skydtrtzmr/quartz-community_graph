@@ -2,6 +2,10 @@
 
 The Graph View component for Quartz - visualize your digital garden as an interactive network graph.
 
+## Pixi 依赖锁定
+
+Pixi 精确锁定为 `8.20.1`。`8.21.0` 的屏幕纹理池清理会在缩放、关闭 renderer 时触发仍绑定纹理的 BindGroup 警告，已与本地销毁调用栈对应。参见上游 [问题 #12247](https://github.com/pixijs/pixijs/issues/12247) 和 [修复 #12259](https://github.com/pixijs/pixijs/pull/12259)。不屏蔽警告，不关闭 WebGPU；未来升级时需要确认发布版本包含修复并复验。
+
 ## 共享聚合规则
 
 图谱只在初始化时准备首屏分组。展开大区、维度聚合或主体文件后，才计算该节点的下一层和相关边；收起再展开复用当前图谱实例内的结果，切换分类配置后重新计算。文件页局部图谱的中心邻居属于首屏，仍在初始化时准备。

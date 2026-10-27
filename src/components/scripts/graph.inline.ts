@@ -38,6 +38,7 @@ import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../uti
 import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { indexGraphLinks, projectLocalGraph } from "./graphLinkIndex"
 import { createOnDemandCache } from "./onDemandCache"
+import { createGraphRenderScope } from "./graphRenderScope"
 import { expansionSeedAngle } from "./expansionLayout"
 import { filterDimensionGraph, parseFilter } from "../../util/dimensionGraphFilter"
 import { globalCoreRules, groupGlobalNeighbors, groupShared, readSharedAggregation } from "../../util/sharedAggregation"
@@ -445,7 +446,10 @@ function main() {
     graph: HTMLElement,
     fullSlug: FullSlug,
     generation: number,
+    isRequestCurrent: () => boolean = () => true,
   ): Promise<() => void> {
+    const isCurrent = () => checkGeneration(generation) && isRequestCurrent() && graph.isConnected
+    if (!isCurrent()) return () => {}
     const startedAt = performance.now()
     let phaseStartedAt = startedAt
     const timings: Record<string, number> = {}
@@ -459,7 +463,7 @@ function main() {
     const visited = getVisited()
     removeAllChildren(graph)
 
-    if (!checkGeneration(generation)) return () => {}
+    if (!isCurrent()) return () => {}
 
     let {
       drag: enableDrag,
@@ -562,12 +566,12 @@ function main() {
           }
         }
       } catch (error) {
-        if (!checkGeneration(generation)) return () => {}
+        if (!isCurrent()) return () => {}
         graph.textContent = "聚合规则加载失败，请检查 aggregation.json 并重新构建。"
         console.error("[Graph] Shared aggregation failed", error)
         return () => {}
       }
-      if (!checkGeneration(generation)) return () => {}
+      if (!isCurrent()) return () => {}
     }
 
     markPhase("aggregation")
@@ -585,9 +589,9 @@ function main() {
     if (usePrecomputed) {
       console.log("[Graph] ===== ATTEMPTING TO LOAD LOCAL GRAPH JSON (priority) =====")
       try {
-        if (!checkGeneration(generation)) return () => {}
+        if (!isCurrent()) return () => {}
         const pdata = await fetchCachedLocalGraph(fullSlug, basePath, localGraphUrl)
-        if (!checkGeneration(generation)) return () => {}
+        if (!isCurrent()) return () => {}
         if (pdata && (isFolderGraph && pdata.view === "folder" || pdata.depth >= depth)) {
           localGraphData = pdata as LocalGraphData
           const visibleNodes = filterGraphContent(new Map(Object.entries(localGraphData.nodes)))
@@ -641,7 +645,7 @@ function main() {
     // 如果预计算不可用或不需要，使用 fetchData + BFS/全局
     let globalPrecomputed: GlobalGraphPrecomputed | null = null
     if (!localGraphData) {
-      if (!checkGeneration(generation)) return () => {}
+      if (!isCurrent()) return () => {}
 
       // [GRAPH3] 全局图谱优先加载预计算的 graphGlobal.json
       if (declaredView === "global") {
@@ -664,7 +668,7 @@ function main() {
         ))
         console.log("[DEBUG] fetchData 完成，数据条目数:", data.size)
       }
-      if (!checkGeneration(generation)) return () => {}
+      if (!isCurrent()) return () => {}
     } else {
       // 局部预计算成功时，从 localGraphData.nodes 构建 graphData
       console.log("[Graph] ===== BUILDING graphData FROM PRECOMPUTED =====")
@@ -1711,7 +1715,7 @@ function main() {
     const height = Math.max(graph.offsetHeight, 250)
 
     // ===== 检查点 3: Pixi 初始化前 =====
-    if (!checkGeneration(generation)) return () => {}
+    if (!isCurrent()) return () => {}
 
     markPhase("prepareGraph")
     graph.dataset.visibleNodeCount = String(graphData.nodes.length)
@@ -2034,7 +2038,7 @@ function main() {
     markPhase("initializePixi")
 
     // ===== 检查点 4: Pixi 初始化完成后 =====
-    if (!checkGeneration(generation)) {
+    if (!isCurrent()) {
       simulation.stop()
       app.destroy({ removeView: true }, { children: true, context: true })
       return () => {}
@@ -3396,6 +3400,17 @@ function main() {
     let lastClickTime = 0
     let lastClickedNodeId: SimpleSlug | null = null
 
+    let appDestroyed = false
+    const pendingTimers = new Set<ReturnType<typeof setTimeout>>()
+    function scheduleTimeout(callback: () => void, delay: number) {
+      const timer = setTimeout(() => {
+        pendingTimers.delete(timer)
+        if (!appDestroyed && isCurrent()) callback()
+      }, delay)
+      pendingTimers.add(timer)
+      return timer
+    }
+
     if (enableDrag) {
       select<HTMLCanvasElement, NodeData | undefined>(app.canvas).call(
         drag<HTMLCanvasElement, NodeData | undefined>()
@@ -3427,7 +3442,7 @@ function main() {
 
             if (dynamics.dragReleaseMs > 0) {
               // 总览图短暂延迟释放拖拽位置，让新加入的节点先开始排布。
-              setTimeout(() => {
+              scheduleTimeout(() => {
                 if (expansionPins.has(event.subject.id)) return
                 event.subject.fx = null
                 event.subject.fy = null
@@ -3442,7 +3457,7 @@ function main() {
             // forceCenter 仅平移质心，本身不负责收拢无连线的分区。
             if (!event.active) {
               simulation.alphaTarget(dynamics.dragAlpha).restart()
-              setTimeout(() => simulation.alphaTarget(0), dynamics.reheatMs)
+              scheduleTimeout(() => simulation.alphaTarget(0), dynamics.reheatMs)
             }
 
             if (Date.now() - dragStartTime < 300) {
@@ -3488,7 +3503,7 @@ function main() {
               clickTimeout = null
               navigateToNode(nodeId, fullSlug)
             } else {
-              clickTimeout = setTimeout(() => {
+              clickTimeout = scheduleTimeout(() => {
                 clickTimeout = null
                 toggleNodeExpansion(nodeId)
               }, DOUBLE_CLICK_DELAY)
@@ -3501,7 +3516,7 @@ function main() {
                 clickTimeout = null
                 if (!node.simulationData.isRegion) navigateToNode(nodeId, fullSlug)
               } else {
-                clickTimeout = setTimeout(() => {
+                clickTimeout = scheduleTimeout(() => {
                   clickTimeout = null
                   toggleNodeExpansion(nodeId)
                 }, DOUBLE_CLICK_DELAY)
@@ -3513,8 +3528,6 @@ function main() {
         })
       }
     }
-
-    let appDestroyed = false
 
     if (enableZoom) {
       const graphZoom = zoom<HTMLCanvasElement, NodeData>()
@@ -3588,7 +3601,7 @@ function main() {
     }
 
     function animate(time: number) {
-      if (appDestroyed || !checkGeneration(generation)) return
+      if (appDestroyed || !isCurrent()) return
 
       for (const n of nodeRenderData) {
         const { x, y } = n.simulationData
@@ -3772,6 +3785,8 @@ function main() {
       if (appDestroyed) return
       console.debug(`[Graph] Tearing down graph for ${slug}`)
       appDestroyed = true
+      pendingTimers.forEach(clearTimeout)
+      pendingTimers.clear()
       if (animationId !== null) {
         cancelAnimationFrame(animationId)
         animationId = null
@@ -3793,7 +3808,7 @@ function main() {
 
   // ============ 导航生命周期管理 ============
   let localGraphCleanups: (() => void)[] = []
-  let globalGraphCleanups: (() => void)[] = []
+  const globalRenderScope = createGraphRenderScope()
 
   function cleanupLocalGraphs() {
     renderGeneration++ // 递增世代，废弃进行中的旧渲染
@@ -3804,10 +3819,8 @@ function main() {
   }
 
   function cleanupGlobalGraphs() {
-    const count = globalGraphCleanups.length
-    if (count > 0) console.debug(`[Graph] Cleaning up ${count} global graphs`)
-    for (const cleanup of globalGraphCleanups) cleanup()
-    globalGraphCleanups = []
+    // Invalidate pending fetch/Pixi work as well as destroying an already visible canvas.
+    globalRenderScope.clear()
   }
 
   // prenav：提前清理，缩短竞态窗口
@@ -3958,9 +3971,11 @@ function main() {
     }
 
     async function renderGlobalGraph(local = false) {
+      const request = globalRenderScope.start()
       const thisGeneration = renderGeneration
       const currentSlug = getFullSlug(window)
       for (const container of globalContainers()) {
+        if (!request.isCurrent() || !checkGeneration(thisGeneration)) return
         container.classList.add("active")
         const sidebar = container.closest(".sidebar") as HTMLElement
         if (sidebar) sidebar.style.zIndex = "1"
@@ -3995,10 +4010,10 @@ function main() {
               "false"
             graphContainer.dataset.cfg = graphContainer.dataset.globalCfg
           }
-          const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration)
+          const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration, request.isCurrent)
           if (cleanup) {
             if (thisGeneration === renderGeneration) {
-              globalGraphCleanups.push(cleanup)
+              request.add(cleanup)
             } else {
               console.log(`[Graph] 全局渲染完成后发现世代已过期，立即执行 cleanup 避免泄漏`)
               cleanup()
@@ -4014,14 +4029,17 @@ function main() {
       if (!dimContainer) return
       const url = dimContainer.dataset["dimensionGraphUrl"] || dimContainer.dataset["localGraphUrl"]
       if (!url) return
+      const request = globalRenderScope.start()
       const thisGeneration = renderGeneration
       const currentSlug = getFullSlug(window)
       for (const container of globalContainers()) {
+        if (!request.isCurrent() || !checkGeneration(thisGeneration)) return
         container.classList.add("active")
         const graphContainer = container.querySelector(".global-graph-container") as HTMLElement
         registerEscapeHandler(container, hideGlobalGraph)
         if (!graphContainer) continue
         // 数据源切换为维度子图：renderGraph 据此走「维度裁剪」路径（scope/context/filter 都从当前 URL 读）
+        graphContainer.dataset.graphView = "dimension"
         graphContainer.dataset["dimensionGraph"] = "true"
         graphContainer.dataset["localGraphUrl"] = url
         graphContainer.dataset["sharedAggregation"] = "true"
@@ -4030,10 +4048,10 @@ function main() {
           ...cfg,
           fontSize: (cfg.fontSize ?? 0.6) * 1.25,
         })
-        const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration)
+        const cleanup = await renderGraph(graphContainer, currentSlug, thisGeneration, request.isCurrent)
         if (cleanup) {
           if (thisGeneration === renderGeneration) {
-            globalGraphCleanups.push(cleanup)
+            request.add(cleanup)
           } else {
             cleanup()
           }
