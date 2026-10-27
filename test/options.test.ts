@@ -2,23 +2,22 @@ import { describe, expect, it } from "vitest"
 import { resolveGraphViewConfig, type GraphProOptions } from "../src/options"
 
 describe("four graph configurations", () => {
-  it("preserves historic folder and dimension values when loading old YAML", () => {
-    const old: GraphProOptions = {
-      graph: { localDepth: 2, expandBatchSize: 5, maxVisibleNodes: 40, loadBatchSize: 10 },
-      localGraph: { depth: 2, scale: 1.1, linkDistance: 70, fontSize: 0.75 },
-      folderGraph: { linkDistance: 125 },
+  it("does not inherit rendering parameters from other views", () => {
+    const config: GraphProOptions = {
+      localGraph: { depth: 2, scale: 2, fontSize: 0.9 },
       globalGraph: { repelForce: 1.5, centerForce: 0.4, linkDistance: 150, enableRadial: true },
     }
-    const folder = resolveGraphViewConfig(old, "folder")
-    expect(folder).toMatchObject({ depth: 2, scale: 1.1, repelForce: 1.5,
-      centerForce: 0.4, linkDistance: 125, fontSize: 0.75, expandBatchSize: 5 })
-    expect(resolveGraphViewConfig(old, "dimension")).toMatchObject({
-      repelForce: 0.38, linkDistance: 72, maxVisibleNodes: 40, loadBatchSize: 10,
+    expect(resolveGraphViewConfig(config, "folder")).toMatchObject({
+      depth: 1, scale: 1.1, repelForce: 0.5, centerForce: 0.3,
+      linkDistance: 30, fontSize: 0.6, enableRadial: false,
+    })
+    expect(resolveGraphViewConfig(config, "dimension")).toMatchObject({
+      depth: 1, repelForce: 0.38, linkDistance: 72, fontSize: 0.75,
     })
   })
 
   it("changes one view without changing the other three", () => {
-    const baseline: GraphProOptions = { configVersion: 2, graphDefaults: {
+    const baseline: GraphProOptions = { graphDefaults: {
       expandBatchSize: 5, maxVisibleNodes: 40, loadBatchSize: 10,
     } }
     const before = Object.fromEntries((["local", "folder", "dimension", "global"] as const)
@@ -34,7 +33,7 @@ describe("four graph configurations", () => {
   })
 
   it("does not let local depth change a folder or dimension collection", () => {
-    const config: GraphProOptions = { configVersion: 2, localGraph: { depth: 3 } }
+    const config: GraphProOptions = { localGraph: { depth: 3 } }
     expect(resolveGraphViewConfig(config, "local").depth).toBe(3)
     expect(resolveGraphViewConfig(config, "folder").depth).toBe(1)
     expect(resolveGraphViewConfig(config, "dimension").depth).toBe(1)

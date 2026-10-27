@@ -100,66 +100,8 @@
     "dependencies": [],
     "defaultOrder": 55,
     "defaultEnabled": false,
-    "defaultOptions": {
-      "graph": {
-        "coreMinLinks": 0,
-        "precomputeLocal": true,
-        "localDepth": 1
-      },
-      "localGraph": {
-        "drag": true,
-        "zoom": true,
-        "depth": 1,
-        "scale": 1.1,
-        "repelForce": 0.5,
-        "centerForce": 0.3,
-        "linkDistance": 30,
-        "fontSize": 0.6,
-        "opacityScale": 1,
-        "showTags": true,
-        "removeTags": [],
-        "focusOnHover": false,
-        "enableRadial": false,
-        "showAggregatedNodeLinks": false
-      },
-      "globalGraph": {
-        "enabled": true,
-        "drag": true,
-        "zoom": true,
-        "depth": -1,
-        "scale": 0.9,
-        "repelForce": 0.5,
-        "centerForce": 0.2,
-        "linkDistance": 30,
-        "fontSize": 0.6,
-        "opacityScale": 1,
-        "showTags": true,
-        "removeTags": [],
-        "focusOnHover": true,
-        "enableRadial": true,
-        "showAggregatedNodeLinks": false,
-        "coreNodeLimit": 100,
-        "startCollapsed": true,
-        "filterNonCoreNodes": true
-      }
-    },
-    "optionSchema": {
-      "configVersion": { "type": "integer", "enum": [2] },
-      "graph": {
-        "type": "object"
-      },
-      "graphDefaults": { "type": "object" },
-      "localGraph": {
-        "type": "object"
-      },
-      "folderGraph": {
-        "type": "object"
-      },
-      "dimensionGraph": { "type": "object" },
-      "globalGraph": {
-        "type": "object"
-      }
-    },
+    "defaultOptions": {},
+    "optionSchema": {},
     "components": {
       "Graph": {
         "displayName": "Graph",

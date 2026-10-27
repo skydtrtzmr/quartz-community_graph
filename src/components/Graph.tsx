@@ -86,10 +86,8 @@ export default ((userOpts?: Partial<GraphOptions>, view: "local" | "folder" = "l
     // 传给 inline 脚本用于拼预计算 JSON 路径
     const basePath = getBasePath(cfg.baseUrl);
     // 运行时判定 usePrecomputed = depth > 0 && depth <= precomputeDepth，
-    // 必须与 emitter 的 options.graph.localDepth 保持一致
-    const precomputeDepth = userOpts?.configVersion === 2
-      ? resolveGraphViewConfig(userOpts, "local").depth
-      : userOpts?.graph?.localDepth ?? localGraph.depth ?? 1;
+    // 必须与 emitter 的 localGraph.depth 保持一致
+    const precomputeDepth = resolveGraphViewConfig(userOpts, "local").depth;
 
     return (
       <div class={classNames(displayClass, "graph", view === "folder" ? "folder-graph" : undefined)}>

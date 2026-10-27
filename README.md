@@ -8,10 +8,10 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 `graphGlobal.json` 的 `expansionMode: "on-demand"` 表示只预计算首屏大区，保留原始节点、边和邻接表，不预生成隐藏主体的邻居聚合。各类图谱目前仍加载完整数据 JSON，按需计算不等于分片下载；页面切换后会创建新的计算缓存。
 
-`graph/selection.json` 提供业务域真实文件连接数；`configVersion: 2` 时 `coreMinLinks` 可在 `graphDefaults` 设置并由 `folderGraph`、`dimensionGraph`、`globalGraph` 各自覆盖。低于门槛的文件仍可作为合格主体的直接邻居出现，列表及分类总数保留全量数据。全局构建与渲染使用同一解析结果。缺少 `configVersion: 2` 的旧 YAML 继续按原 `graph.coreMinLinks` 解释。
+`graph/selection.json` 提供业务域真实文件连接数。`coreMinLinks` 在全局 `configuration.graph.defaults` 设置，由 `configuration.graph.folder/dimension/global` 分别覆盖。低于门槛的文件仍可作为合格主体的直接邻居出现，列表及分类总数保留全量数据。全局构建与渲染使用同一解析结果。
 
 全局图谱：首屏仍为核心文件夹分区；分区内的核心集合按 `aggregation.json.resolved[目录]`
-取前 N 项逐级聚合。`options.globalGraph.coreAggregationMaxLevels` 为正整数，默认 2，
+取前 N 项逐级聚合。`configuration.graph.global.coreAggregationMaxLevels` 为正整数，默认 2，
 不计首屏文件夹层；在分组前截取，即使前两项缺值也不会补用第三项。
 此选项仅影响全局图谱。字段候选来自共享产物；运行时按右上角目录聚合面板保存的顺序选择前 N 级，未设置时使用产物默认顺序。全局图谱按文件夹大区分别取配置，局部图谱和文件夹页图谱按当前目录取配置；面板调整后当前图谱立即重绘。
 实际核心节点展开后，其非核心邻居只按共享 `root` 的文件夹层级分组，
@@ -50,7 +50,7 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 
 文件夹图谱由 `emitters/graphFolder.ts` 构建，主体是目录子树内的真实内容文件。
 第一阶段保留成员间关系以及成员的直接入链、出链、标签，不继续递归遍历外部邻居；
-不再使用文件页的 `graph.localDepth` 或人工目录中心边。正文不写入文件夹产物，
+不再使用文件页的 `localGraph.depth` 或人工目录中心边。正文不写入文件夹产物，
 分类字段保留，以支持右上角动态分类。直接关联目前仍随基础 JSON 一起加载，分块按需获取待后续阶段实现。
 
 暂沿用 `graph/local/**` 地址，JSON 以 `view: "folder"` 标明集合语义；升级后应完整重建业务域，
@@ -61,7 +61,7 @@ The Graph View component for Quartz - visualize your digital garden as an intera
 后续待办：文件夹页的核心字段层数统一设计另行实施；`aggregation.json` 的字段对象
 改为字符串数组也单独迁移（需版本升级及各消费插件同步）。当前对象格式保留是兼容选择。
 
-`configVersion: 2` 时，`FolderGraph` 的力参数由 `folderGraph` 独立决定；未显式写出的值只取内置默认值或 `graphDefaults`，不继承其他视图。现有 YAML 已将旧配置的有效力参数写入 `folderGraph`。
+`FolderGraph` 的力参数由 `configuration.graph.folder` 独立决定；未显式写出的值只取内置默认值或 `configuration.graph.defaults`，不继承其他视图。全部图谱参数集中到全局配置，插件条目不再填写 options。
 缺少版本标记的旧 YAML 仍保留文件夹继承全局力参数、其他显示项继承局部图的兼容行为。
 成员范围来自文件夹集合 JSON，聚合关系来自共享聚合规则。
 径向力的目标半径随画布尺寸计算，并在展开、收起全过程持续启用；不固定分区坐标。
@@ -148,8 +148,8 @@ interface D3Config {
   enableRadial?: boolean;
 }
 
+// 加载器传给插件的内部参数；YAML 只配置 configuration.graph。
 interface GraphOptions {
-  configVersion?: 2;
   graphDefaults?: Partial<D3Config>; // Common interaction defaults
   localGraph?: Partial<D3Config>; // File page
   folderGraph?: Partial<D3Config>; // Folder collection
@@ -198,22 +198,24 @@ External libraries are loaded from CDN when the graph is first rendered.
 
 ### 分批展开与整体上限
 
-配置版本 2 将批次默认值放在 `graphDefaults`，四种视图可以各自覆盖：
+配置只保留一套规则。批次默认值放在全局 `configuration.graph.defaults`，四种视图可以各自覆盖。插件中的 `graphDefaults` 是加载器注入的内部选项，不直接写入 YAML：
 
 ```yaml
-configVersion: 2
-graphDefaults:
-  maxVisibleNodes: 500
-  expandBatchSize: 20
-  loadBatchSize: 100
-localGraph:
-  depth: 2
-folderGraph:
-  linkDistance: 125
-dimensionGraph:
-  linkDistance: 72
-globalGraph:
-  linkDistance: 150
+configuration:
+  graph:
+    defaults:
+      maxVisibleNodes: 500
+      expandBatchSize: 20
+      loadBatchSize: 100
+      coreMinLinks: 0
+    precomputeLocal: true
+    local: {maxVisibleNodes: 500, depth: 2}
+    folder: {maxVisibleNodes: 500, linkDistance: 125}
+    dimension: {maxVisibleNodes: 500, linkDistance: 72}
+    global: {maxVisibleNodes: 500, linkDistance: 150}
+plugins:
+  - source: ../plugins-local/graph-pro
+    enabled: true
 ```
 
 - `maxVisibleNodes` 沿用已有配置名，现表示**首屏节点预算**，包含文件、聚合、大区。首屏在创建 Pixi 对象和力导向模拟前截断；用户后续主动展开、加载更多可以超过这个数量。

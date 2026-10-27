@@ -4,7 +4,7 @@
 // 输出协议与 v4 完全一致（运行时 graph3.inline.ts 用同一算法拼路径）。
 //
 // 与 v4 的差异：
-// - 构建开关从 `cfg.graph.precomputeLocal / localDepth` 改为插件 options（v5 的 configuration 段不放业务配置）
+// - 由组合 emitter 传入预计算开关与 localGraph.depth 的解析结果。
 // - write / ContentDetails / 路径工具改为插件自包含或 @quartz-community 包
 
 import type {
@@ -44,7 +44,7 @@ interface LocalGraphData {
 interface Options {
   /** 是否在构建期预计算局部图谱（YAML: options.graph.precomputeLocal） */
   precomputeLocal?: boolean
-  /** 局部图谱深度（YAML: options.graph.localDepth） */
+  /** 局部图谱深度（由 localGraph.depth 解析后传入） */
   localDepth?: number
 }
 

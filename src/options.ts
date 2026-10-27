@@ -1,32 +1,15 @@
-/** graph-pro YAML options. Version 2 resolves all four views independently.
- * Unversioned configs use the historic inheritance in this module only.
- */
+/** graph-pro 内部注入参数及统一解析规则。用户 YAML 只配置 configuration.graph，加载器转换为本类型。 */
 import { DEFAULT_CORE_AGGREGATION_MAX_LEVELS } from "./util/sharedAggregation"
 
 export interface GraphProOptions {
-  /** 2 表示四种视图独立配置；缺省时兼容旧的跨视图继承。 */
-  configVersion?: 2
   graphDefaults?: Partial<GraphCommonConfig>
-  /** 构建期选项；深度和交互预算是旧版 YAML 的兼容键。 */
-  graph?: {
-    /** 是否在构建期预计算每个页面的局部图谱（默认 true） */
-    precomputeLocal?: boolean
-    /** 局部图谱展开深度（默认 1） */
-    localDepth?: number
-    /** 旧版共享连接数门槛；新版使用 graphDefaults / 视图段。 */
-    coreMinLinks?: number
-    /** 每个聚合节点首次展开及继续加载的子节点数量，默认 20 */
-    expandBatchSize?: number
-    /** 首屏可见节点预算（包含聚合和大区），默认 500；后续可主动分批加载。 */
-    maxVisibleNodes?: number
-    /** 非聚合展开队列的批次，默认 100。 */
-    loadBatchSize?: number
-  }
+  /** 构建期是否预计算局部图谱；深度统一取 localGraph.depth。 */
+  graph?: { precomputeLocal?: boolean }
 
-  /** 文件页局部图谱；新版 depth 同时用于构建期预计算。 */
+  /** 文件页局部图谱。 */
   localGraph?: Partial<GraphLocalConfig>
 
-  /** 文件夹页图谱；旧版缺省项按旧规则继承。 */
+  /** 文件夹页图谱；不继承其他视图。 */
   folderGraph?: Partial<GraphCollectionConfig>
 
   dimensionGraph?: Partial<GraphCollectionConfig>
@@ -93,45 +76,14 @@ export type GraphViewName = "local" | "folder" | "dimension" | "global"
 
 /** One source of effective configuration for emitters, components and injected pages. */
 export function resolveGraphViewConfig(options: GraphProOptions = {}, view: GraphViewName): GraphViewConfig {
-  const legacy = options.configVersion !== 2
-  const globalBase = { ...DEFAULT_GLOBAL_GRAPH_CFG, ...options.globalGraph }
-  const defaults = view === "local" ? DEFAULT_LOCAL_GRAPH_CFG
-    : view === "dimension" ? DEFAULT_DIMENSION_GRAPH_CFG
-    : view === "global" ? DEFAULT_GLOBAL_GRAPH_CFG
-    : legacy ? {
-      ...DEFAULT_LOCAL_GRAPH_CFG, ...options.localGraph,
-      repelForce: globalBase.repelForce,
-      centerForce: globalBase.centerForce,
-      linkDistance: globalBase.linkDistance,
-      enableRadial: globalBase.enableRadial,
-    } as GraphViewConfig : DEFAULT_LOCAL_GRAPH_CFG
-  const legacyPaging = {
-    coreMinLinks: options.graph?.coreMinLinks ?? 0,
-    expandBatchSize: options.graph?.expandBatchSize ?? 20,
-    maxVisibleNodes: options.graph?.maxVisibleNodes ?? 500,
-    loadBatchSize: options.graph?.loadBatchSize ?? 100,
-  }
+  const defaults = view === "dimension" ? DEFAULT_DIMENSION_GRAPH_CFG
+    : view === "global" ? DEFAULT_GLOBAL_GRAPH_CFG : DEFAULT_LOCAL_GRAPH_CFG
   const viewOptions = view === "local" ? options.localGraph
     : view === "folder" ? options.folderGraph
     : view === "dimension" ? options.dimensionGraph : options.globalGraph
-  const resolved = {
-    ...defaults,
-    ...(legacy ? legacyPaging : {}),
-    ...options.graphDefaults,
-    ...viewOptions,
-  } as GraphViewConfig
-  // Historic dimension pages inherited only paging from the global host.
-  if (legacy && view === "dimension") {
-    for (const key of ["expandBatchSize", "maxVisibleNodes", "loadBatchSize"] as const) {
-      const value = options.globalGraph?.[key] ?? options.graph?.[key]
-      if (typeof value === "number" && options.graphDefaults?.[key] === undefined && options.dimensionGraph?.[key] === undefined) resolved[key] = value
-    }
-  }
-  if (legacy && view === "folder" && options.folderGraph?.linkDistance === undefined) resolved.linkDistance = globalBase.linkDistance
+  const resolved = { ...defaults, ...options.graphDefaults, ...viewOptions } as GraphViewConfig
   if (view === "global") resolved.depth = -1
-  if (view === "folder") resolved.depth = legacy
-    ? options.localGraph?.depth as number ?? DEFAULT_LOCAL_GRAPH_CFG.depth : 1
-  if (view === "dimension") resolved.depth = 1
+  if (view === "folder" || view === "dimension") resolved.depth = 1
   return resolved
 }
 

@@ -28,7 +28,7 @@ async function* drain(
  * ① GraphLocal（每页局部图谱 JSON）② GraphGlobal（全局图谱单文件 JSON）。
  *
  * 两个子 emitter 共用同一份 YAML options：
- * - `options.graph.{precomputeLocal,localDepth}` → GraphLocal
+ * - `options.graph.precomputeLocal` 与 `options.localGraph.depth` → GraphLocal
  * - `options.globalGraph.*`                     → GraphGlobal
  */
 export default function graphProEmitter(
@@ -36,15 +36,13 @@ export default function graphProEmitter(
 ): QuartzEmitterPluginInstance {
   const local = GraphLocalEmitter({
     precomputeLocal: options.graph?.precomputeLocal ?? true,
-    localDepth: options.configVersion === 2
-      ? resolveGraphViewConfig(options, "local").depth : options.graph?.localDepth ?? 1,
+    localDepth: resolveGraphViewConfig(options, "local").depth,
   })
 
-  const globalOpts = options.globalGraph ?? {}
+  const globalOpts = resolveGraphViewConfig(options, "global")
   const global = GraphGlobalEmitter({
-    // 显式排除掉纯组件侧字段不必要，GraphGlobal 只读取自己认识的键
+    // 与组件使用相同的 defaults → global 解析结果。
     ...globalOpts,
-    coreMinLinks: resolveGraphViewConfig(options, "global").coreMinLinks,
     enabled: globalOpts.enabled ?? true,
   })
 

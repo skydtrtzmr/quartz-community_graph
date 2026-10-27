@@ -61,9 +61,9 @@ describe("Graph Component", () => {
     expect(typeof overlay.afterDOMLoaded).toBe("string");
   });
 
-  it("文件夹画布复用全局力参数，仍读取目录局部 JSON 并保留自身聚合语义", () => {
+  it("文件夹画布独立读取力参数，并保留自身聚合语义", () => {
     const options: GraphOptions = {
-      graph: { localDepth: 1 },
+      folderGraph: { repelForce: 0.8, centerForce: 0.2, linkDistance: 125, enableRadial: true },
       localGraph: { depth: 1, repelForce: 0.6, centerForce: 0.3, linkDistance: 70, enableRadial: false, showAggregatedNodeLinks: false },
       globalGraph: { depth: -1, repelForce: 1.5, centerForce: 0.4, linkDistance: 150, enableRadial: true, showAggregatedNodeLinks: true, coreNodeLimit: 50 },
     };
@@ -72,7 +72,7 @@ describe("Graph Component", () => {
     const global = emittedConfig(GlobalGraphOverlay(options)(props))!;
     const local = emittedConfig(Graph(options)(props))!;
     for (const key of ["repelForce", "centerForce", "linkDistance", "enableRadial"] as const) {
-      expect(folder[key]).toBe(global[key]);
+      expect(folder[key]).toBe(options.folderGraph![key]);
     }
     expect(folder.depth).toBe(1);
     expect(folder.showAggregatedNodeLinks).toBe(false);
