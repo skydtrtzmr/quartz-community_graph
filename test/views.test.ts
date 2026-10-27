@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aggregationContext,
   focusNodeIds,
   graphViewOf,
   isExpandableLocalGroup,
@@ -201,4 +202,23 @@ describe("graph view selection", () => {
     expect(isExpandableCollectionNode("local", { id: "项目/a", isCore: true })).toBe(false);
   });
 
+});
+
+
+describe("aggregation navigation context", () => {
+  it("does not constrain a global aggregation to the page underneath the overlay", () => {
+    expect(aggregationContext("global", "grouped/a-0002")).toBeUndefined();
+  });
+
+  it("keeps the source for the file local view, including its enlarged presentation", () => {
+    expect(aggregationContext("local", "grouped/a-0002")).toBe("grouped/a-0002");
+  });
+
+  it("does not invent a source for folder, dimension or index pages", () => {
+    expect(aggregationContext("folder", "grouped/a-0002")).toBeUndefined();
+    expect(aggregationContext("dimension", "grouped/a-0002")).toBeUndefined();
+    for (const slug of ["", "/", "grouped/", "_dimensions/演示分组/e组"]) {
+      expect(aggregationContext("local", slug)).toBeUndefined();
+    }
+  });
 });

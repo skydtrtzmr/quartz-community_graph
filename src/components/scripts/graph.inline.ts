@@ -33,7 +33,7 @@ import {
 import type { FullSlug, SimpleSlug } from "@quartz-community/types"
 import type { D3Config } from "../Graph"
 import { AggregationRule, UNCLASSIFIED_KEY, commonFolderOf } from "../../util/aggregation"
-import { focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes } from "./views"
+import { aggregationContext, focusNodeIds, graphViewOf, isExpandableCollectionNode, selectCoreNodes } from "./views"
 import { resolveCoreMinLinks, selectScope, type GraphSelection } from "../../util/coreMinLinks"
 import { createGraphSimulation, createGraphLinkForce, createAggAwareCollide, simulationSettings } from "./graphSimulation"
 import { indexGraphLinks, projectLocalGraph } from "./graphLinkIndex"
@@ -877,13 +877,10 @@ function main() {
 
       const params = new URLSearchParams()
       if (info.scope) params.set("scope", info.scope)
-      // ?context= 仅在从普通内容页（有局部图谱的页面）跳转时携带：
-      // 文件夹页（simplifySlug 带尾斜杠）与维度值页（_dimensions/ 前缀）的 slug
-      // 没有"来源节点"语义，且维度值页会因此把 _dimensions/** 逐跳传播。
-      const fromSlug = simplifySlug(getFullSlug(window))
-      const isContentPage =
-        !!fromSlug && !fromSlug.startsWith("_dimensions/") && !fromSlug.endsWith("/")
-      if (isContentPage) params.set("context", fromSlug)
+      // 依据当前图谱视图，而非页面类型：全局图谱不受背后内容页的邻居范围限制。
+      // 放大局部图谱仍保留 local 视图，因此继续携带其来源节点。
+      const context = aggregationContext(graphView, simplifySlug(getFullSlug(window)))
+      if (context) params.set("context", context)
       // 祖先维度约束：与目录树二级节点入口一致的 `?filter=字段:值,...` 机制。
       // 当前图谱聚合是「目录 + 单字段」，字段级节点没有字段级祖先 → ancestorFilter 为空；
       // 未来图谱支持多级字段聚合时，此处自动带上祖先 filter，保持入口一致。

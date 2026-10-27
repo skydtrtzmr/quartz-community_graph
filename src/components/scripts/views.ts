@@ -4,6 +4,14 @@ import { qualifiesAsGlobalCore, resolveCoreMinLinks } from "../../util/coreMinLi
 
 export type GraphView = "global" | "local" | "folder" | "dimension";
 
+/** 来源节点约束属于文件局部视图，不能由承载全局图谱的页面决定。 */
+export function aggregationContext(view: GraphView, fromSlug: string): string | undefined {
+  if (view === "local" && fromSlug && !fromSlug.startsWith("_dimensions/") && !fromSlug.endsWith("/")) {
+    return fromSlug;
+  }
+  return undefined;
+}
+
 export interface CoreCandidate {
   id: string;
   isCore?: boolean;
